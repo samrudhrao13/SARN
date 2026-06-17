@@ -67,3 +67,10 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Env files (all modes)
+.env*
+!.env.example
+
+# Build output
+dist/
