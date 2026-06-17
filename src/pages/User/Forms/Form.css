@@ -1,0 +1,141 @@
+.form-card {
+  background: #fff;
+  padding: 24px;
+  border-radius: 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px 24px;
+}
+
+.form-grid .full {
+  grid-column: span 2;
+}
+
+label {
+  font-weight: 600;
+  display: block;
+  margin-bottom: 6px;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+textarea {
+  min-height: 80px;
+}
+
+button {
+  margin-top: 20px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-row input {
+  margin-right: 6px;
+}
+/* ✅ MATCH DROPDOWN WITH INPUT */
+select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background-color: #fff;
+  font-size: 14px;
+  height: 38px; /* 🔥 this fixes alignment */
+  outline: none;
+}
+
+/* optional hover/focus polish */
+select:focus {
+  border-color: #2563eb;
+}
+/* ===== NOT PUBLISHABLE BLOCK ===== */
+.not-publishable-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px; /* tighter spacing */
+}
+
+/* checkbox + text in one line */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* remove extra spacing from label */
+.checkbox-row label {
+  margin: 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* fix checkbox size consistency */
+.checkbox-row input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* note styling */
+.note-text {
+  font-size: 13px;
+  color: #666;
+  margin-left: 22px; /* 🔥 aligns note under text, not checkbox */
+}
+.status-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.status-row select {
+  flex: 1;
+  height: 38px;
+}
+
+.update-btn {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 6px;
+  border: none;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.update-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+.update-btn {
+  width: 200px;
+  height: 40px;
+  cursor: pointer;
+  position: relative;
+  z-index: 10; /* 🔥 ensures clickable */
+}

@@ -1,0 +1,63 @@
+.admin-dashboard-container {
+  padding: 40px 30px;
+}
+
+.admin-title {
+  font-size: 32px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: #1e293b;
+}
+
+.admin-subtitle {
+  font-size: 16px;
+  margin-bottom: 25px;
+  color: #64748b;
+}
+
+/* GRID LAYOUT */
+.shortcut-grid {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+/* CARD STYLE */
+.shortcut-card {
+  background: #ffffff;
+  padding: 20px;
+  width: 260px;
+
+  border-radius: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  border: 1px solid #e2e8f0;
+
+  cursor: pointer;
+  transition: 0.25s ease;
+}
+
+.shortcut-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+  background: #eef4ff;
+}
+
+/* ICON */
+.shortcut-icon {
+  font-size: 38px;
+  margin-bottom: 10px;
+}
+
+/* TITLE */
+.shortcut-card h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+/* DESCRIPTION */
+.shortcut-card p {
+  font-size: 14px;
+  color: #475569;
+}
