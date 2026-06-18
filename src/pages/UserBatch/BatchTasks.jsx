@@ -7,6 +7,21 @@ export default function BatchTasks() {
 
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+    const pageSize = 100;
+
+    const [total, setTotal] = useState(0);
+
+    const [counts, setCounts] = useState({
+    assigned: 0,
+    completed: 0,
+    pending: 0,
+    });
+        const [language, setLanguage] =
+    useState("");
+
+    const [languages, setLanguages] =
+    useState([]);
 
   const user =
     JSON.parse(
@@ -14,24 +29,44 @@ export default function BatchTasks() {
     ) || {};
 
   useEffect(() => {
-    loadTasks();
-  }, []);
+  loadTasks();
+}, [page, language]);
 
   async function loadTasks() {
     try {
-      const res = await api.get(
-        "/user/batch-tasks",
-        {
-          params: {
+            const res = await api.get(
+                "/user/batch-tasks",
+                {
+            params: {
             userId: user.userId,
-          },
-        }
-      );
+            page,
+            pageSize,
+            language,
+            },
+                }
+            );
+            
+        if (res.data.ok) {
+  setTasks(res.data.tasks || []);
 
-      if (res.data.ok) {
-        setTasks(res.data.tasks || []);
-      }
-    } catch (err) {
+  setLanguages(
+    res.data.languages || []
+  );
+
+  setTotal(
+    res.data.pagination?.total || 0
+  );
+
+  setCounts(
+    res.data.counts || {
+      assigned: 0,
+      completed: 0,
+      pending: 0,
+    }
+  );
+}
+    } 
+    catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
@@ -54,7 +89,60 @@ export default function BatchTasks() {
       minHeight: "100vh",
     }}
   >
-      <h2>Assigned Batch Tasks</h2>
+      <h2>
+        Assigned Batch Tasks ({total})
+        </h2>
+        <div
+        style={{
+            display: "flex",
+            gap: 30,
+            marginBottom: 20,
+            marginTop: 10,
+        }}
+        >
+        <div>
+            <strong>Assigned:</strong>{" "}
+            {counts.assigned}
+        </div>
+
+        <div>
+            <strong>Completed:</strong>{" "}
+            {counts.completed}
+        </div>
+
+        <div>
+            <strong>Pending:</strong>{" "}
+            {counts.pending}
+        </div>
+        </div>
+        <div
+  style={{
+    marginBottom: 20,
+  }}
+>
+  <select
+    value={language}
+    onChange={e => {
+      setLanguage(
+        e.target.value
+      );
+      setPage(1);
+    }}
+  >
+    <option value="">
+      All Languages
+    </option>
+
+    {languages.map(l => (
+      <option
+        key={l}
+        value={l}
+      >
+        {l}
+      </option>
+    ))}
+  </select>
+</div>
 
       {loading ? (
         <p>Loading...</p>
@@ -75,6 +163,8 @@ export default function BatchTasks() {
               <th>New Repository</th>
 
               <th>Chemical Name</th>
+              <th>Language</th>
+              <th>Duplicate</th>
 
               <th>Status</th>
 
@@ -84,7 +174,15 @@ export default function BatchTasks() {
 
           <tbody>
             {tasks.map(task => (
-              <tr key={task.recordId}>
+              <tr
+                key={task.recordId}
+                style={{
+                    background:
+                    task.duplicate
+                        ? "#fee2e2"
+                        : "white",
+                }}
+                >
                 <td>{task.sheet}</td>
 
                 <td>
@@ -92,11 +190,40 @@ export default function BatchTasks() {
                 </td>
 
                 <td>
-                  {task.chemicalName}
-                </td>
+  {task.chemicalName}
+</td>
+<td>
+  {task.language || "-"}
+</td>
 
-                <td>
-                  <StatusBadge
+<td>
+  {task.duplicate ? (
+    <span
+      style={{
+        background: "#dc2626",
+        color: "#fff",
+        padding: "4px 8px",
+        borderRadius: 4,
+        fontWeight: 600,
+        fontSize: 12,
+      }}
+    >
+      DUPLICATE
+    </span>
+  ) : (
+    <span
+      style={{
+        color: "#16a34a",
+        fontWeight: 600,
+      }}
+    >
+      NORMAL
+    </span>
+  )}
+</td>
+
+<td>
+  <StatusBadge
                     status={
                       task.status
                     }
@@ -129,7 +256,7 @@ export default function BatchTasks() {
             {tasks.length === 0 && (
               <tr>
                 <td
-                  colSpan="5"
+                  colSpan="7"
                   style={{
                     textAlign:
                       "center",
@@ -143,6 +270,41 @@ export default function BatchTasks() {
           </tbody>
         </table>
       )}
+      <div
+  style={{
+    marginTop: 20,
+    display: "flex",
+    justifyContent: "center",
+    gap: 10,
+    alignItems: "center",
+  }}
+>
+  <button
+    disabled={page === 1}
+    onClick={() =>
+      setPage(page - 1)
+    }
+  >
+    Previous
+  </button>
+
+  <span>
+    Page {page} of{" "}
+    {Math.ceil(total / pageSize)}
+  </span>
+
+  <button
+    disabled={
+      page >=
+      Math.ceil(total / pageSize)
+    }
+    onClick={() =>
+      setPage(page + 1)
+    }
+  >
+    Next
+  </button>
+</div>
     </div>
   );
 }
