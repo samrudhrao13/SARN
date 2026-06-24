@@ -57,7 +57,7 @@ export default function BatchReport() {
     acc.completed        += r.completed         || 0;
     return acc;
   }, { assigned: 0, allTimeCompleted: 0, completed: 0 });
-  const filtPrev    = filtTotals.allTimeCompleted;
+  const filtPrev    = Math.max(0, filtTotals.allTimeCompleted - filtTotals.completed);
   const filtPending = Math.max(0, filtTotals.assigned - filtTotals.allTimeCompleted);
   const filtPct     = filtTotals.assigned ? Math.round((filtTotals.allTimeCompleted / filtTotals.assigned) * 100) : 0;
 
@@ -145,7 +145,7 @@ export default function BatchReport() {
 
               {filtered.map((row, i) => {
                 const key                = `${row.userId}|||${row.sheetId}`;
-                const prevCompleted      = row.allTimeCompleted || 0;
+                const prevCompleted      = Math.max(0, (row.allTimeCompleted || 0) - (row.completed || 0));
                 const totalPending       = Math.max(0, (row.assigned || 0) - (row.allTimeCompleted || 0));
                 const pct                = row.assigned ? Math.round(((row.allTimeCompleted || 0) / row.assigned) * 100) : 0;
                 const sheetLabel         = (row.sheetId || "").replace(/_/g, " ");

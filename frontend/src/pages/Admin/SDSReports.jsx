@@ -138,7 +138,7 @@ export default function SDSReports() {
                     TOTAL ({uniqueUserCount} user{uniqueUserCount !== 1 ? "s" : ""}, {filtered.length} row{filtered.length !== 1 ? "s" : ""})
                   </td>
                   <Num v={t.totalAssigned} />
-                  <Num v={t.allTimeTotal||0} prev />
+                  <Num v={(t.allTimeTotal||0) - (t.total||0)} prev />
                   <Num v={t.total} bold />
                   <Num v={Math.max(0,(t.totalAssigned||0)-(t.allTimeTotal||0))} pending />
                   <Num v={t.searchE} />
@@ -162,7 +162,7 @@ export default function SDSReports() {
               {filtered.map((row, i) => {
                 const key            = `${row.userId}|||${row.sheetId}`;
                 const sheetLabel     = (row.sheetId || "").replace(/_/g, " ");
-                const prevCompleted  = row.allTimeTotal || 0;
+                const prevCompleted  = Math.max(0, (row.allTimeTotal || 0) - (row.total || 0));
                 const totalPending   = Math.max(0, (row.totalAssigned || 0) - (row.allTimeTotal || 0));
 
                 return (

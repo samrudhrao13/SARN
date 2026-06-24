@@ -55,7 +55,7 @@ export default function DQReports() {
     acc.totalCompleted   += r.totalCompleted   || 0;
     return acc;
   }, { totalAssigned: 0, allTimeCompleted: 0, totalCompleted: 0 });
-  const filtPrev    = filtTotals.allTimeCompleted;
+  const filtPrev    = Math.max(0, filtTotals.allTimeCompleted - filtTotals.totalCompleted);
   const filtPending = Math.max(0, filtTotals.totalAssigned - filtTotals.allTimeCompleted);
   const filtPct     = filtTotals.totalAssigned ? Math.round((filtTotals.allTimeCompleted / filtTotals.totalAssigned) * 100) : 0;
 
@@ -144,7 +144,7 @@ export default function DQReports() {
 
               {filtered.map((row, i) => {
                 const key           = `${row.userId}|||${row.sheetId}`;
-                const prevCompleted = row.allTimeCompleted || 0;
+                const prevCompleted = Math.max(0, (row.allTimeCompleted || 0) - (row.totalCompleted || 0));
                 const totalPending  = Math.max(0, (row.totalAssigned || 0) - (row.allTimeCompleted || 0));
                 const pct           = row.totalAssigned ? Math.round(((row.allTimeCompleted || 0) / row.totalAssigned) * 100) : 0;
                 const sheetLabel    = (row.sheetId || "").replace(/_/g, " ");
