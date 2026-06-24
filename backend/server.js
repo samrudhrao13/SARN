@@ -5731,13 +5731,10 @@ app.get("/admin/sds/reports-data", async (req, res) => {
           if (!sd || !sd.assignedTo) continue;
 
           const uid = sd.assignedTo;
-          const assignedAt = sd.assignedAt?.toDate ? sd.assignedAt.toDate() : null;
           const completedAt = sd.completedAt?.toDate ? sd.completedAt.toDate() : null;
 
-          const inPeriodAssigned = !fromDate || (assignedAt && assignedAt >= fromDate && assignedAt <= toDate);
+          // completedAt respects the period filter; totalAssigned is always the full count
           const inPeriodCompleted = completedAt && (!fromDate || (completedAt >= fromDate && completedAt <= toDate));
-
-          if (!inPeriodAssigned && !inPeriodCompleted) continue;
 
           const k = `${uid}|||${sheetId}`;
           if (!ubStats[k]) {
@@ -5752,7 +5749,7 @@ app.get("/admin/sds/reports-data", async (req, res) => {
             };
           }
 
-          if (inPeriodAssigned) ubStats[k].totalAssigned++;
+          ubStats[k].totalAssigned++; // total ever assigned — no period filter
 
           if (inPeriodCompleted) {
             ubStats[k][`${stage}${langSuffix}`]++;
@@ -5828,14 +5825,11 @@ app.get("/admin/dq/reports-data", async (req, res) => {
         const uid = d.assignedTo;
         if (!uid) continue;
 
-        const assignedAt = d.assignedAt ? new Date(d.assignedAt) : null;
         const updatedAt = d.updatedAt ? new Date(d.updatedAt) : null;
         const isCompleted = d.billingReady === true;
 
+        // completedAt respects the period filter; totalAssigned is always the full count
         const inPeriodCompleted = isCompleted && (!fromDate || (updatedAt && updatedAt >= fromDate && updatedAt <= toDate));
-        const inPeriodAssigned = !fromDate || (assignedAt && assignedAt >= fromDate && assignedAt <= toDate) || inPeriodCompleted;
-
-        if (!inPeriodAssigned && !inPeriodCompleted) continue;
 
         const k = `${uid}|||${sheetId}`;
         if (!ubStats[k]) {
@@ -5845,7 +5839,7 @@ app.get("/admin/dq/reports-data", async (req, res) => {
           };
         }
 
-        if (inPeriodAssigned) ubStats[k].totalAssigned++;
+        ubStats[k].totalAssigned++; // total ever assigned — no period filter
         if (inPeriodCompleted) {
           ubStats[k].totalCompleted++;
           ubStats[k].records.push({
@@ -5915,14 +5909,11 @@ app.get("/admin/batch/reports-data", async (req, res) => {
         const uid = d.verification?.assignedTo;
         if (!uid) continue;
 
-        const assignedAt = d.verification?.assignedAt?.toDate ? d.verification.assignedAt.toDate() : null;
         const completedAt = d.verification?.completedAt?.toDate ? d.verification.completedAt.toDate() : null;
         const isCompleted = d.verification?.status === "Completed";
 
+        // completedAt respects the period filter; assigned is always the full count
         const inPeriodCompleted = isCompleted && (!fromDate || (completedAt && completedAt >= fromDate && completedAt <= toDate));
-        const inPeriodAssigned = !fromDate || (assignedAt && assignedAt >= fromDate && assignedAt <= toDate) || inPeriodCompleted;
-
-        if (!inPeriodAssigned && !inPeriodCompleted) continue;
 
         const k = `${uid}|||${sheetId}`;
         if (!ubStats[k]) {
@@ -5932,7 +5923,7 @@ app.get("/admin/batch/reports-data", async (req, res) => {
           };
         }
 
-        if (inPeriodAssigned) ubStats[k].assigned++;
+        ubStats[k].assigned++; // total ever assigned — no period filter
 
         if (inPeriodCompleted) {
           ubStats[k].completed++;
