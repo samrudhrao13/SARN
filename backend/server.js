@@ -5714,7 +5714,8 @@ app.get("/admin/sds/reports-data", async (req, res) => {
 
     const sheetsSnap = await db.collection("sds_sheets").get();
     const STAGES = ["search", "supersede", "transcription", "billing"];
-    const userStats = {};
+    // Key: uid|||sheetId — one entry per user per sheet
+    const ubStats = {};
 
     for (const sheetDoc of sheetsSnap.docs) {
       const sheetId = sheetDoc.id;
@@ -5723,8 +5724,7 @@ app.get("/admin/sds/reports-data", async (req, res) => {
       for (const recDoc of recsSnap.docs) {
         const d = recDoc.data();
         const lang = String(d.common?.language || d.search?.language || "english").toLowerCase().trim();
-        const isEnglish = !lang || lang === "english";
-        const langSuffix = isEnglish ? "E" : "ML";
+        const langSuffix = (!lang || lang === "english") ? "E" : "ML";
 
         for (const stage of STAGES) {
           const sd = d[stage];
@@ -5739,27 +5739,25 @@ app.get("/admin/sds/reports-data", async (req, res) => {
 
           if (!inPeriodAssigned && !inPeriodCompleted) continue;
 
-          if (!userStats[uid]) {
-            userStats[uid] = {
-              userId: uid, name: userMap[uid] || uid,
+          const k = `${uid}|||${sheetId}`;
+          if (!ubStats[k]) {
+            ubStats[k] = {
+              userId: uid, name: userMap[uid] || uid, sheetId,
               totalAssigned: 0,
               searchE: 0, searchML: 0,
               supersedeE: 0, supersedeML: 0,
               transcriptionE: 0, transcriptionML: 0,
               billingE: 0, billingML: 0,
-              total: 0, sheetSet: new Set(), records: [],
+              total: 0, records: [],
             };
           }
 
-          if (inPeriodAssigned) {
-            userStats[uid].totalAssigned++;
-            userStats[uid].sheetSet.add(sheetId);
-          }
+          if (inPeriodAssigned) ubStats[k].totalAssigned++;
 
           if (inPeriodCompleted) {
-            userStats[uid][`${stage}${langSuffix}`]++;
-            userStats[uid].total++;
-            userStats[uid].records.push({
+            ubStats[k][`${stage}${langSuffix}`]++;
+            ubStats[k].total++;
+            ubStats[k].records.push({
               sheet: sheetId,
               refId: d.repoId || recDoc.id,
               chemical: d.common?.chemicalProduct || "",
@@ -5772,18 +5770,23 @@ app.get("/admin/sds/reports-data", async (req, res) => {
       }
     }
 
-    const users = Object.values(userStats).map(u => ({
-      ...u, sheets: [...u.sheetSet].sort(), sheetSet: undefined,
-    })).sort((a, b) => b.totalAssigned - a.totalAssigned);
+    // One row per user per sheet, sorted by assigned desc
+    const rows = Object.values(ubStats)
+      .sort((a, b) => b.totalAssigned - a.totalAssigned || a.name.localeCompare(b.name));
 
-    const totals = users.reduce((acc, u) => {
-      acc.totalAssigned += u.totalAssigned;
+    // Unique users for filter dropdown
+    const seen = {};
+    rows.forEach(r => { seen[r.userId] = r.name; });
+    const users = Object.entries(seen).map(([userId, name]) => ({ userId, name })).sort((a,b) => a.name.localeCompare(b.name));
+
+    const totals = rows.reduce((acc, r) => {
+      acc.totalAssigned += r.totalAssigned;
       ["searchE","searchML","supersedeE","supersedeML","transcriptionE","transcriptionML","billingE","billingML","total"]
-        .forEach(k => { acc[k] = (acc[k] || 0) + (u[k] || 0); });
+        .forEach(k => { acc[k] = (acc[k] || 0) + (r[k] || 0); });
       return acc;
     }, { totalAssigned: 0, searchE:0, searchML:0, supersedeE:0, supersedeML:0, transcriptionE:0, transcriptionML:0, billingE:0, billingML:0, total:0 });
 
-    res.json({ ok: true, period, totals, users });
+    res.json({ ok: true, period, totals, rows, users });
   } catch (err) {
     console.error("SDS REPORTS ERROR:", err);
     res.status(500).json({ ok: false, error: err.message });
@@ -5898,7 +5901,8 @@ app.get("/admin/batch/reports-data", async (req, res) => {
     usersSnap.docs.forEach(d => { userMap[d.id] = d.data().name || d.data().email || d.id; });
 
     const sheetsSnap = await db.collection("batch_sheets").get();
-    const userStats = {};
+    // Key: uid|||sheetId — one entry per user per sheet
+    const ubStats = {};
 
     for (const sheetDoc of sheetsSnap.docs) {
       const sheetId = sheetDoc.id;
@@ -5914,27 +5918,23 @@ app.get("/admin/batch/reports-data", async (req, res) => {
         const isCompleted = d.verification?.status === "Completed";
 
         const inPeriodCompleted = isCompleted && (!fromDate || (completedAt && completedAt >= fromDate && completedAt <= toDate));
-        // A record "belongs" to the period if assigned in it OR completed in it
         const inPeriodAssigned = !fromDate || (assignedAt && assignedAt >= fromDate && assignedAt <= toDate) || inPeriodCompleted;
 
         if (!inPeriodAssigned && !inPeriodCompleted) continue;
 
-        if (!userStats[uid]) {
-          userStats[uid] = {
-            userId: uid, name: userMap[uid] || uid,
-            totalAssigned: 0, totalCompleted: 0,
-            sheetSet: new Set(), records: [],
+        const k = `${uid}|||${sheetId}`;
+        if (!ubStats[k]) {
+          ubStats[k] = {
+            userId: uid, name: userMap[uid] || uid, sheetId,
+            assigned: 0, completed: 0, records: [],
           };
         }
 
-        if (inPeriodAssigned) {
-          userStats[uid].totalAssigned++;
-          userStats[uid].sheetSet.add(sheetId);
-        }
+        if (inPeriodAssigned) ubStats[k].assigned++;
 
         if (inPeriodCompleted) {
-          userStats[uid].totalCompleted++;
-          userStats[uid].records.push({
+          ubStats[k].completed++;
+          ubStats[k].records.push({
             sheet: sheetId,
             recordId: d.recordId || recDoc.id,
             repositoryNo: d.common?.newRepository || "",
@@ -5946,17 +5946,22 @@ app.get("/admin/batch/reports-data", async (req, res) => {
       }
     }
 
-    const users = Object.values(userStats).map(u => ({
-      ...u, sheets: [...u.sheetSet].sort(), sheetSet: undefined,
-    })).sort((a, b) => b.totalAssigned - a.totalAssigned);
+    // One row per user per sheet, sorted by assigned desc
+    const rows = Object.values(ubStats)
+      .sort((a, b) => b.assigned - a.assigned || a.name.localeCompare(b.name));
 
-    const totals = users.reduce((acc, u) => {
-      acc.totalAssigned += u.totalAssigned;
-      acc.totalCompleted += u.totalCompleted;
+    // Unique users for filter dropdown
+    const seen = {};
+    rows.forEach(r => { seen[r.userId] = r.name; });
+    const users = Object.entries(seen).map(([userId, name]) => ({ userId, name })).sort((a,b) => a.name.localeCompare(b.name));
+
+    const totals = rows.reduce((acc, r) => {
+      acc.totalAssigned += r.assigned;
+      acc.totalCompleted += r.completed;
       return acc;
     }, { totalAssigned: 0, totalCompleted: 0 });
 
-    res.json({ ok: true, period, totals, users });
+    res.json({ ok: true, period, totals, rows, users });
   } catch (err) {
     console.error("BATCH REPORTS ERROR:", err);
     res.status(500).json({ ok: false, error: err.message });

@@ -9,11 +9,11 @@ const PERIODS = [
 ];
 
 export default function BatchReport() {
-  const [period, setPeriod]               = useState("week");
-  const [data, setData]                   = useState(null);
-  const [loading, setLoading]             = useState(false);
-  const [expandedUsers, setExpandedUsers] = useState(new Set());
-  const [userFilter, setUserFilter]       = useState("");
+  const [period, setPeriod]             = useState("week");
+  const [data, setData]                 = useState(null);
+  const [loading, setLoading]           = useState(false);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const [userFilter, setUserFilter]     = useState("");
 
   useEffect(() => { loadData(); }, [period]);
 
@@ -21,15 +21,15 @@ export default function BatchReport() {
     setLoading(true);
     try {
       const res = await api.get("/admin/batch/reports-data", { params: { period } });
-      if (res.data.ok) { setData(res.data); setExpandedUsers(new Set()); }
+      if (res.data.ok) { setData(res.data); setExpandedRows(new Set()); }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   }
 
-  function toggleUser(uid) {
-    setExpandedUsers(prev => {
+  function toggleRow(key) {
+    setExpandedRows(prev => {
       const next = new Set(prev);
-      next.has(uid) ? next.delete(uid) : next.add(uid);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -42,9 +42,11 @@ export default function BatchReport() {
     window.open(`${api.defaults.baseURL}/admin/report/user-detail?userId=${uid}&period=${period}`, "_blank");
   }
 
+  const allRows  = data?.rows  || [];
   const allUsers = data?.users || [];
-  const filtered = userFilter ? allUsers.filter(u => u.userId === userFilter) : allUsers;
+  const filtered = userFilter ? allRows.filter(r => r.userId === userFilter) : allRows;
   const t        = data?.totals || {};
+  const uniqueUserCount = new Set(filtered.map(r => r.userId)).size;
 
   return (
     <div style={{ padding: "20px", minHeight: "100vh", background: "#f8fafc" }}>
@@ -53,7 +55,7 @@ export default function BatchReport() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#0f172a" }}>Batch Monitoring Dashboard</h2>
-          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 13 }}>User-wise batch verification tracking</p>
+          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 13 }}>User × Business — one row per sheet</p>
         </div>
         <button onClick={dlTeamPDF} style={btnPrimary}>⬇ Download Team PDF</button>
       </div>
@@ -80,8 +82,8 @@ export default function BatchReport() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12, marginBottom: 24 }}>
           <StatCard label="Total Assigned"  value={t.totalAssigned}  color="#3b82f6" bg="#eff6ff" />
           <StatCard label="Total Completed" value={t.totalCompleted} color="#16a34a" bg="#f0fdf4" />
-          <StatCard label="Pending"         value={(t.totalAssigned||0) - (t.totalCompleted||0)} color="#f59e0b" bg="#fef3c7" />
-          <StatCard label="Active Users"    value={filtered.length}  color="#8b5cf6" bg="#ede9fe" />
+          <StatCard label="Pending"         value={Math.max(0, (t.totalAssigned||0) - (t.totalCompleted||0))} color="#f59e0b" bg="#fef3c7" />
+          <StatCard label="Active Users"    value={uniqueUserCount}  color="#8b5cf6" bg="#ede9fe" />
         </div>
       )}
 
@@ -94,7 +96,7 @@ export default function BatchReport() {
             <thead>
               <tr style={{ background: "#0f172a", color: "#fff" }}>
                 <th style={th}>User</th>
-                <th style={th}>Batch Sheets</th>
+                <th style={th}>Business (Sheet)</th>
                 <th style={{ ...th, textAlign: "center" }}>Assigned</th>
                 <th style={{ ...th, textAlign: "center" }}>Completed</th>
                 <th style={{ ...th, textAlign: "center" }}>Pending</th>
@@ -104,12 +106,14 @@ export default function BatchReport() {
             </thead>
             <tbody>
               {/* Totals row */}
-              {data && filtered.length > 1 && (
+              {data && filtered.length > 0 && (
                 <tr style={{ background: "#1e293b", color: "#fff", fontWeight: 700, fontSize: 13 }}>
-                  <td style={{ padding: "8px 12px" }} colSpan={2}>TOTAL ({filtered.length} users)</td>
+                  <td style={{ padding: "8px 12px" }} colSpan={2}>
+                    TOTAL ({uniqueUserCount} user{uniqueUserCount !== 1 ? "s" : ""}, {filtered.length} row{filtered.length !== 1 ? "s" : ""})
+                  </td>
                   <td style={{ textAlign: "center", padding: 8 }}>{t.totalAssigned}</td>
                   <td style={{ textAlign: "center", padding: 8, color: "#86efac" }}>{t.totalCompleted}</td>
-                  <td style={{ textAlign: "center", padding: 8, color: "#fca5a5" }}>{(t.totalAssigned||0)-(t.totalCompleted||0)}</td>
+                  <td style={{ textAlign: "center", padding: 8, color: "#fca5a5" }}>{Math.max(0, (t.totalAssigned||0) - (t.totalCompleted||0))}</td>
                   <td style={{ textAlign: "center", padding: 8 }}>
                     {t.totalAssigned ? Math.round((t.totalCompleted / t.totalAssigned) * 100) : 0}%
                   </td>
@@ -123,27 +127,31 @@ export default function BatchReport() {
                 </td></tr>
               )}
 
-              {filtered.map((u, i) => {
-                const pct = u.totalAssigned ? Math.round((u.totalCompleted / u.totalAssigned) * 100) : 0;
+              {filtered.map((row, i) => {
+                const key     = `${row.userId}|||${row.sheetId}`;
+                const pending = Math.max(0, row.assigned - row.completed);
+                const pct     = row.assigned ? Math.round((row.completed / row.assigned) * 100) : 0;
+                const sheetLabel = (row.sheetId || "").replace(/_/g, " ");
+
                 return (
-                  <React.Fragment key={u.userId}>
+                  <React.Fragment key={key}>
                     <tr
-                      onClick={() => toggleUser(u.userId)}
+                      onClick={() => toggleRow(key)}
                       style={{ background: i % 2 === 0 ? "#f8fafc" : "#fff", cursor: "pointer" }}
                     >
                       <td style={{ padding: "9px 12px", fontWeight: 600, whiteSpace: "nowrap" }}>
                         <span style={{ marginRight: 6, fontSize: 10, color: "#94a3b8" }}>
-                          {expandedUsers.has(u.userId) ? "▼" : "▶"}
+                          {expandedRows.has(key) ? "▼" : "▶"}
                         </span>
-                        {u.name}
+                        {row.name}
                       </td>
                       <td style={{ padding: "9px 12px" }}>
-                        {(u.sheets || []).map(s => <span key={s} style={sheetBadge}>{s}</span>)}
+                        <span style={sheetBadge}>{sheetLabel}</span>
                       </td>
-                      <td style={{ textAlign: "center", padding: 9, fontWeight: 700 }}>{u.totalAssigned}</td>
-                      <td style={{ textAlign: "center", padding: 9, color: "#16a34a", fontWeight: 600 }}>{u.totalCompleted}</td>
-                      <td style={{ textAlign: "center", padding: 9, color: u.totalAssigned - u.totalCompleted > 0 ? "#dc2626" : "#94a3b8" }}>
-                        {u.totalAssigned - u.totalCompleted}
+                      <td style={{ textAlign: "center", padding: 9, fontWeight: 700 }}>{row.assigned}</td>
+                      <td style={{ textAlign: "center", padding: 9, color: "#16a34a", fontWeight: 600 }}>{row.completed}</td>
+                      <td style={{ textAlign: "center", padding: 9, color: pending > 0 ? "#dc2626" : "#94a3b8" }}>
+                        {pending}
                       </td>
                       <td style={{ textAlign: "center", padding: 9 }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -155,7 +163,7 @@ export default function BatchReport() {
                       </td>
                       <td style={{ textAlign: "center", padding: "6px 10px" }}>
                         <button
-                          onClick={e => { e.stopPropagation(); dlUserPDF(u.userId); }}
+                          onClick={e => { e.stopPropagation(); dlUserPDF(row.userId); }}
                           style={btnSmall}
                         >
                           PDF
@@ -163,31 +171,30 @@ export default function BatchReport() {
                       </td>
                     </tr>
 
-                    {expandedUsers.has(u.userId) && (
+                    {expandedRows.has(key) && (
                       <tr>
                         <td colSpan={7} style={{ background: "#f1f5f9", padding: "0 16px 16px 32px" }}>
                           <div style={{ marginTop: 12 }}>
                             <strong style={{ fontSize: 13, color: "#0f172a" }}>
-                              Completed Records — {u.name} ({u.records?.length || 0})
+                              Completed Records — {row.name} / {sheetLabel} ({row.records?.length || 0})
                             </strong>
                             <div style={{ overflow: "auto", marginTop: 8 }}>
                               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 600 }}>
                                 <thead>
                                   <tr style={{ background: "#0f172a", color: "#fff" }}>
-                                    {["Sheet", "Repository No", "Chemical Name", "Language", "Completed At"].map(h => (
+                                    {["Repository No", "Chemical Name", "Language", "Completed At"].map(h => (
                                       <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600 }}>{h}</th>
                                     ))}
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {(u.records || []).length === 0 && (
-                                    <tr><td colSpan={5} style={{ padding: 10, color: "#94a3b8", textAlign: "center" }}>
+                                  {(row.records || []).length === 0 && (
+                                    <tr><td colSpan={4} style={{ padding: 10, color: "#94a3b8", textAlign: "center" }}>
                                       No completed records in this period
                                     </td></tr>
                                   )}
-                                  {(u.records || []).map((r, j) => (
+                                  {(row.records || []).map((r, j) => (
                                     <tr key={j} style={{ background: j % 2 === 0 ? "#fff" : "#f8fafc" }}>
-                                      <td style={subTd}>{r.sheet}</td>
                                       <td style={subTd}>{r.repositoryNo || "—"}</td>
                                       <td style={{ ...subTd, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.chemical || "—"}</td>
                                       <td style={subTd}>
@@ -235,9 +242,9 @@ function langBadge(lang) {
   };
 }
 
-const th = { padding: "10px 12px", textAlign: "left", fontWeight: 600, fontSize: 12 };
-const subTd = { padding: "6px 10px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle" };
-const sheetBadge = { display: "inline-block", background: "#e2e8f0", color: "#334155", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600, marginRight: 4, marginBottom: 2 };
+const th        = { padding: "10px 12px", textAlign: "left", fontWeight: 600, fontSize: 12 };
+const subTd     = { padding: "6px 10px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle" };
+const sheetBadge = { display: "inline-block", background: "#e2e8f0", color: "#334155", borderRadius: 4, padding: "2px 8px", fontSize: 12, fontWeight: 600 };
 const btnPrimary = { padding: "8px 14px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer", fontSize: 13 };
 const btnSmall   = { padding: "4px 10px", background: "#0f172a", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 600, cursor: "pointer" };
 const periodBtn  = (active) => ({ padding: "7px 14px", borderRadius: 6, border: "none", background: active ? "#2563eb" : "#e2e8f0", color: active ? "#fff" : "#0f172a", fontWeight: 600, cursor: "pointer", fontSize: 13 });

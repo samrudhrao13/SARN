@@ -16,11 +16,11 @@ const STAGE_COLORS = {
 };
 
 export default function SDSReports() {
-  const [period, setPeriod]           = useState("week");
-  const [data, setData]               = useState(null);
-  const [loading, setLoading]         = useState(false);
-  const [expandedUsers, setExpandedUsers] = useState(new Set());
-  const [userFilter, setUserFilter]   = useState("");
+  const [period, setPeriod]             = useState("week");
+  const [data, setData]                 = useState(null);
+  const [loading, setLoading]           = useState(false);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const [userFilter, setUserFilter]     = useState("");
 
   useEffect(() => { loadData(); }, [period]);
 
@@ -28,15 +28,15 @@ export default function SDSReports() {
     setLoading(true);
     try {
       const res = await api.get("/admin/sds/reports-data", { params: { period } });
-      if (res.data.ok) { setData(res.data); setExpandedUsers(new Set()); }
+      if (res.data.ok) { setData(res.data); setExpandedRows(new Set()); }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   }
 
-  function toggleUser(uid) {
-    setExpandedUsers(prev => {
+  function toggleRow(key) {
+    setExpandedRows(prev => {
       const next = new Set(prev);
-      next.has(uid) ? next.delete(uid) : next.add(uid);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   }
@@ -49,9 +49,11 @@ export default function SDSReports() {
     window.open(`${api.defaults.baseURL}/admin/report/pdf?period=${period}`, "_blank");
   }
 
-  const allUsers    = data?.users || [];
-  const filtered    = userFilter ? allUsers.filter(u => u.userId === userFilter) : allUsers;
-  const t           = data?.totals || {};
+  const allRows  = data?.rows  || [];
+  const allUsers = data?.users || [];
+  const filtered = userFilter ? allRows.filter(r => r.userId === userFilter) : allRows;
+  const t        = data?.totals || {};
+  const uniqueUserCount = new Set(filtered.map(r => r.userId)).size;
 
   return (
     <div style={{ padding: "20px", minHeight: "100vh", background: "#f8fafc" }}>
@@ -60,7 +62,7 @@ export default function SDSReports() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#0f172a" }}>SDS Monitoring Dashboard</h2>
-          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 13 }}>User-wise search · supersede · transcription · billing</p>
+          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: 13 }}>User × Business — one row per sheet · search · supersede · transcription · billing</p>
         </div>
         <button onClick={dlTeamPDF} style={btnPrimary}>⬇ Download Team PDF</button>
       </div>
@@ -107,7 +109,7 @@ export default function SDSReports() {
             <thead>
               <tr style={{ background: "#0f172a", color: "#fff" }}>
                 <Th>User</Th>
-                <Th>Business (Sheets)</Th>
+                <Th>Business (Sheet)</Th>
                 <Th center>Assigned</Th>
                 <Th center>Srch E</Th>
                 <Th center>Srch ML</Th>
@@ -123,9 +125,11 @@ export default function SDSReports() {
             </thead>
             <tbody>
               {/* Totals row */}
-              {data && filtered.length > 1 && (
+              {data && filtered.length > 0 && (
                 <tr style={{ background: "#1e293b", color: "#fff", fontWeight: 700, fontSize: 13 }}>
-                  <td style={{ padding: "8px 12px" }} colSpan={2}>TOTAL ({filtered.length} users)</td>
+                  <td style={{ padding: "8px 12px" }} colSpan={2}>
+                    TOTAL ({uniqueUserCount} user{uniqueUserCount !== 1 ? "s" : ""}, {filtered.length} row{filtered.length !== 1 ? "s" : ""})
+                  </td>
                   <Num v={t.totalAssigned} />
                   <Num v={t.searchE} />
                   <Num v={t.searchML} ml />
@@ -146,94 +150,95 @@ export default function SDSReports() {
                 </td></tr>
               )}
 
-              {filtered.map((u, i) => (
-                <React.Fragment key={u.userId}>
-                  {/* User summary row */}
-                  <tr
-                    onClick={() => toggleUser(u.userId)}
-                    style={{ background: i % 2 === 0 ? "#f8fafc" : "#fff", cursor: "pointer" }}
-                  >
-                    <td style={{ padding: "9px 12px", fontWeight: 600, whiteSpace: "nowrap" }}>
-                      <span style={{ marginRight: 6, fontSize: 10, color: "#94a3b8" }}>
-                        {expandedUsers.has(u.userId) ? "▼" : "▶"}
-                      </span>
-                      {u.name}
-                    </td>
-                    <td style={{ padding: "9px 12px" }}>
-                      {(u.sheets || []).map(s => (
-                        <span key={s} style={sheetBadge}>{s}</span>
-                      ))}
-                    </td>
-                    <Num v={u.totalAssigned} />
-                    <Num v={u.searchE} />
-                    <Num v={u.searchML} ml />
-                    <Num v={u.supersedeE} />
-                    <Num v={u.supersedeML} ml />
-                    <Num v={u.transcriptionE} />
-                    <Num v={u.transcriptionML} ml />
-                    <Num v={u.billingE} />
-                    <Num v={u.billingML} ml />
-                    <Num v={u.total} bold />
-                    <td style={{ textAlign: "center", padding: "6px 10px" }}>
-                      <button
-                        onClick={e => { e.stopPropagation(); dlUserPDF(u.userId); }}
-                        style={btnSmall}
-                      >
-                        PDF
-                      </button>
-                    </td>
-                  </tr>
+              {filtered.map((row, i) => {
+                const key        = `${row.userId}|||${row.sheetId}`;
+                const sheetLabel = (row.sheetId || "").replace(/_/g, " ");
 
-                  {/* Expanded record list */}
-                  {expandedUsers.has(u.userId) && (
-                    <tr>
-                      <td colSpan={13} style={{ background: "#f1f5f9", padding: "0 16px 16px 32px" }}>
-                        <div style={{ marginTop: 12 }}>
-                          <strong style={{ fontSize: 13, color: "#0f172a" }}>
-                            Completed Records — {u.name} ({u.records?.length || 0})
-                          </strong>
-                          <div style={{ overflow: "auto", marginTop: 8 }}>
-                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
-                              <thead>
-                                <tr style={{ background: "#0f172a", color: "#fff" }}>
-                                  {["Sheet", "Ref ID", "Chemical", "Language", "Stage", "Completed At"].map(h => (
-                                    <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600 }}>{h}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {(u.records || []).length === 0 && (
-                                  <tr><td colSpan={6} style={{ padding: 10, color: "#94a3b8", textAlign: "center" }}>
-                                    No completed records in this period
-                                  </td></tr>
-                                )}
-                                {(u.records || []).map((r, j) => (
-                                  <tr key={j} style={{ background: j % 2 === 0 ? "#fff" : "#f8fafc" }}>
-                                    <td style={subTd}>{r.sheet}</td>
-                                    <td style={subTd}>{r.refId}</td>
-                                    <td style={{ ...subTd, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.chemical || "—"}</td>
-                                    <td style={subTd}>
-                                      <span style={langBadge(r.language)}>{r.language || "—"}</span>
-                                    </td>
-                                    <td style={subTd}>
-                                      <span style={{ ...stageBadge, ...STAGE_COLORS[r.stage] }}>{r.stage}</span>
-                                    </td>
-                                    <td style={subTd}>
-                                      {r.completedAt
-                                        ? new Date(r.completedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })
-                                        : "—"}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
+                return (
+                  <React.Fragment key={key}>
+                    <tr
+                      onClick={() => toggleRow(key)}
+                      style={{ background: i % 2 === 0 ? "#f8fafc" : "#fff", cursor: "pointer" }}
+                    >
+                      <td style={{ padding: "9px 12px", fontWeight: 600, whiteSpace: "nowrap" }}>
+                        <span style={{ marginRight: 6, fontSize: 10, color: "#94a3b8" }}>
+                          {expandedRows.has(key) ? "▼" : "▶"}
+                        </span>
+                        {row.name}
+                      </td>
+                      <td style={{ padding: "9px 12px" }}>
+                        <span style={sheetBadge}>{sheetLabel}</span>
+                      </td>
+                      <Num v={row.totalAssigned} />
+                      <Num v={row.searchE} />
+                      <Num v={row.searchML} ml />
+                      <Num v={row.supersedeE} />
+                      <Num v={row.supersedeML} ml />
+                      <Num v={row.transcriptionE} />
+                      <Num v={row.transcriptionML} ml />
+                      <Num v={row.billingE} />
+                      <Num v={row.billingML} ml />
+                      <Num v={row.total} bold />
+                      <td style={{ textAlign: "center", padding: "6px 10px" }}>
+                        <button
+                          onClick={e => { e.stopPropagation(); dlUserPDF(row.userId); }}
+                          style={btnSmall}
+                        >
+                          PDF
+                        </button>
                       </td>
                     </tr>
-                  )}
-                </React.Fragment>
-              ))}
+
+                    {/* Expanded record list */}
+                    {expandedRows.has(key) && (
+                      <tr>
+                        <td colSpan={13} style={{ background: "#f1f5f9", padding: "0 16px 16px 32px" }}>
+                          <div style={{ marginTop: 12 }}>
+                            <strong style={{ fontSize: 13, color: "#0f172a" }}>
+                              Completed Records — {row.name} / {sheetLabel} ({row.records?.length || 0})
+                            </strong>
+                            <div style={{ overflow: "auto", marginTop: 8 }}>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 700 }}>
+                                <thead>
+                                  <tr style={{ background: "#0f172a", color: "#fff" }}>
+                                    {["Ref ID", "Chemical", "Language", "Stage", "Completed At"].map(h => (
+                                      <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600 }}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(row.records || []).length === 0 && (
+                                    <tr><td colSpan={5} style={{ padding: 10, color: "#94a3b8", textAlign: "center" }}>
+                                      No completed records in this period
+                                    </td></tr>
+                                  )}
+                                  {(row.records || []).map((r, j) => (
+                                    <tr key={j} style={{ background: j % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                                      <td style={subTd}>{r.refId}</td>
+                                      <td style={{ ...subTd, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.chemical || "—"}</td>
+                                      <td style={subTd}>
+                                        <span style={langBadgeStyle(r.language)}>{r.language || "—"}</span>
+                                      </td>
+                                      <td style={subTd}>
+                                        <span style={{ ...stageBadge, ...STAGE_COLORS[r.stage] }}>{r.stage}</span>
+                                      </td>
+                                      <td style={subTd}>
+                                        {r.completedAt
+                                          ? new Date(r.completedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })
+                                          : "—"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -276,7 +281,7 @@ function Num({ v, ml, bold }) {
 
 /* ─── Styles ─── */
 
-function langBadge(lang) {
+function langBadgeStyle(lang) {
   const ml = lang && lang.toLowerCase() !== "english";
   return {
     display: "inline-block",
@@ -303,11 +308,9 @@ const sheetBadge = {
   background: "#e2e8f0",
   color: "#334155",
   borderRadius: 4,
-  padding: "2px 6px",
-  fontSize: 11,
+  padding: "2px 8px",
+  fontSize: 12,
   fontWeight: 600,
-  marginRight: 4,
-  marginBottom: 2,
 };
 
 const subTd = {
