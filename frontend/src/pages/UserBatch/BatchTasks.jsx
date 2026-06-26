@@ -2,6 +2,24 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../../config/apiClient";
 
+function DueDateBadge({ dueDate }) {
+  if (!dueDate) return <span style={{ color: "#9ca3af", fontSize: 11 }}>—</span>;
+  const due  = new Date(dueDate + "T00:00:00Z");
+  const now  = new Date(); now.setUTCHours(0, 0, 0, 0);
+  const days = Math.ceil((due - now) / 86400000);
+  let bg, color, icon;
+  if (days < 0)       { bg = "#fef2f2"; color = "#dc2626"; icon = "🔴"; }
+  else if (days <= 2) { bg = "#fff7ed"; color = "#ea580c"; icon = "🟠"; }
+  else if (days <= 7) { bg = "#fefce8"; color = "#ca8a04"; icon = "🟡"; }
+  else                { bg = "#f0fdf4"; color = "#16a34a"; icon = "🟢"; }
+  const label = days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? "Due today" : `${days}d left`;
+  return (
+    <span style={{ background: bg, color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {icon} {dueDate} · {label}
+    </span>
+  );
+}
+
 export default function BatchTasks() {
   const navigate = useNavigate();
 
@@ -18,13 +36,14 @@ export default function BatchTasks() {
     pending: 0,
     });
         const [language, setLanguage] =
-    useState("");
+    useState(() => localStorage.getItem("sarn_batch_language") || "");
 
     const [languages, setLanguages] =
     useState([]);
 
-    const [sheet, setSheet] = useState("");
+    const [sheet, setSheet] = useState(() => localStorage.getItem("sarn_batch_sheet") || "");
     const [sheets, setSheets] = useState([]);
+    const [sheetDueDates, setSheetDueDates] = useState({});
 
     const [searchRepo, setSearchRepo] =
   useState("");
@@ -33,6 +52,12 @@ export default function BatchTasks() {
     JSON.parse(
       localStorage.getItem("sarnUser")
     ) || {};
+
+  useEffect(() => {
+    api.get("/sheets/due-dates").then(res => {
+      if (res.data.ok) setSheetDueDates(res.data.batch || {});
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
   loadTasks();
@@ -105,10 +130,8 @@ export default function BatchTasks() {
   return (
   <div
     style={{
-      padding: "20px",
       width: "100%",
       boxSizing: "border-box",
-      minHeight: "100vh",
     }}
   >
       <h2>
@@ -150,6 +173,7 @@ export default function BatchTasks() {
     value={sheet}
     onChange={e => {
       setSheet(e.target.value);
+      localStorage.setItem("sarn_batch_sheet", e.target.value);
       setPage(1);
     }}
     style={{
@@ -169,9 +193,8 @@ export default function BatchTasks() {
   <select
     value={language}
     onChange={e => {
-      setLanguage(
-        e.target.value
-      );
+      setLanguage(e.target.value);
+      localStorage.setItem("sarn_batch_language", e.target.value);
       setPage(1);
     }}
     style={{
@@ -234,7 +257,7 @@ export default function BatchTasks() {
               }}
             >
               <th>Sheet</th>
-
+              <th>Due Date</th>
               <th>New Repository</th>
 
               <th>Chemical Name</th>
@@ -259,6 +282,7 @@ export default function BatchTasks() {
                 }}
                 >
                 <td>{task.sheet}</td>
+                <td><DueDateBadge dueDate={sheetDueDates[task.sheet]} /></td>
 
                 <td>
                   {task.newRepository || "-"}
@@ -331,7 +355,7 @@ export default function BatchTasks() {
             {filteredTasks.length === 0 && (
               <tr>
                 <td
-                  colSpan="7"
+                  colSpan="8"
                   style={{
                     textAlign:
                       "center",
@@ -344,6 +368,7 @@ export default function BatchTasks() {
             )}
           </tbody>
         </table>
+
       )}
       <div
   style={{

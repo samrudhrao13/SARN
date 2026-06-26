@@ -8,14 +8,14 @@ export default function DQDatabase() {
   const navigate = useNavigate();
 
   const [sheets, setSheets] = useState([]);
-  const [sheet, setSheet] = useState("");
+  const [sheet, setSheet] = useState(() => localStorage.getItem("sarn_admin_dq_db_sheet") || "");
   const [rows, setRows] = useState([]);
 
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("ALL");
+  const [filter, setFilter] = useState(() => localStorage.getItem("sarn_admin_dq_db_filter") || "ALL");
   const [msg, setMsg] = useState("");
 
   /* ================= LOAD DQ SHEETS ================= */
@@ -78,6 +78,7 @@ export default function DQDatabase() {
             value={sheet}
             onChange={e => {
               setSheet(e.target.value);
+              localStorage.setItem("sarn_admin_dq_db_sheet", e.target.value);
               setPage(1);
             }}
             style={selectStyle}
@@ -102,6 +103,7 @@ export default function DQDatabase() {
             value={filter}
             onChange={e => {
               setFilter(e.target.value);
+              localStorage.setItem("sarn_admin_dq_db_filter", e.target.value);
               setPage(1);
             }}
             style={selectStyle}

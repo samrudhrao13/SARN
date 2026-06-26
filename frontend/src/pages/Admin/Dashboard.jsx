@@ -61,6 +61,14 @@ export default function Dashboard() {
           color="#16a34a"
           onClick={() => navigate("/admin/sds/billing")}
         />
+
+        <ActionCard
+          title="Reports"
+          desc="Export and review SDS workflow data"
+          icon="📊"
+          color="#ea580c"
+          onClick={() => navigate("/admin/sds/reports")}
+        />
       </div>
     </>
   );

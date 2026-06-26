@@ -8,13 +8,13 @@ export default function SDSDatabase() {
   const navigate = useNavigate();
 
   const [sheets, setSheets] = useState([]);
-  const [sheet, setSheet] = useState("");
+  const [sheet, setSheet] = useState(() => localStorage.getItem("sarn_admin_sds_db_sheet") || "");
 
   const [rows, setRows] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
 
-  const [filter, setFilter] = useState("ALL");
+  const [filter, setFilter] = useState(() => localStorage.getItem("sarn_admin_sds_db_filter") || "ALL");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -80,6 +80,7 @@ export default function SDSDatabase() {
           value={sheet}
           onChange={(e) => {
             setSheet(e.target.value);
+            localStorage.setItem("sarn_admin_sds_db_sheet", e.target.value);
             setPage(1);
           }}
           style={input}
@@ -104,6 +105,7 @@ export default function SDSDatabase() {
           value={filter}
           onChange={(e) => {
             setFilter(e.target.value);
+            localStorage.setItem("sarn_admin_sds_db_filter", e.target.value);
             setPage(1);
           }}
           style={input}

@@ -68,8 +68,10 @@ export default function AdminSidebar() {
             <SidebarBtn label="Assign Users" path="/admin/assign" active={isActive("/admin/assign")} />
             <SidebarBtn label="Workflow Control" path="/admin/workflow" active={isActive("/admin/workflow")} />
             <SidebarBtn label="Database" path="/admin/database" active={isActive("/admin/database")} />
-            <SidebarBtn label="Billing" path="/admin/sds/billing" active={isActive("/admin/sds/billing")} />
-            <SidebarBtn label="Reports" path="/admin/sds/reports" active={isActive("/admin/sds/reports")} />
+            <SidebarBtn label="Billing"      path="/admin/sds/billing"  active={isActive("/admin/sds/billing")} />
+            <SidebarBtn label="Reports"      path="/admin/sds/reports"  active={isActive("/admin/sds/reports")} />
+            <SidebarBtn label="SDS Scanner"  path="/admin/sds/scanner"  active={isActive("/admin/sds/scanner")} />
+            <SidebarBtn label="📞 Calls & Meetings" path="/admin/calls" active={isActive("/admin/calls")} />
             <LogoutBtn />
           </>
         )}
@@ -84,6 +86,7 @@ export default function AdminSidebar() {
             <SidebarBtn label="Database" path="/admin/dq/database" active={isActive("/admin/dq/database")} />
             <SidebarBtn label="Billing" path="/admin/dq/billing" active={isActive("/admin/dq/billing")} />
             <SidebarBtn label="Reports" path="/admin/dq/reports" active={isActive("/admin/dq/reports")} />
+            <SidebarBtn label="📞 Calls & Meetings" path="/admin/calls" active={isActive("/admin/calls")} />
             <LogoutBtn />
           </>
         )}
@@ -109,6 +112,12 @@ export default function AdminSidebar() {
             />
 
             <SidebarBtn
+              label="Workflow Control"
+              path="/admin/batch/workflow"
+              active={isActive("/admin/batch/workflow")}
+            />
+
+            <SidebarBtn
               label="Billing"
               path="/admin/batch/billing"
               active={isActive("/admin/batch/billing")}
@@ -119,7 +128,7 @@ export default function AdminSidebar() {
               path="/admin/batch/report"
               active={isActive("/admin/batch/report")}
             />
-
+            <SidebarBtn label="📞 Calls & Meetings" path="/admin/calls" active={isActive("/admin/calls")} />
             <LogoutBtn />
           </>
         )}

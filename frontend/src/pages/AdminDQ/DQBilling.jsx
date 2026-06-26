@@ -8,9 +8,9 @@ export default function DQBilling() {
   const navigate = useNavigate();
 
   const [sheets, setSheets] = useState([]);
-  const [sheet, setSheet] = useState("");
+  const [sheet, setSheet] = useState(() => localStorage.getItem("sarn_admin_dq_bill_sheet") || "");
   const [rows, setRows] = useState([]);
-  const [filter, setFilter] = useState("ALL");
+  const [filter, setFilter] = useState(() => localStorage.getItem("sarn_admin_dq_bill_filter") || "ALL");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [page, setPage] = useState(1);
@@ -19,6 +19,11 @@ export default function DQBilling() {
     api.get("/dq/sheets").then((res) => {
       if (res.data.ok) setSheets(res.data.sheets || []);
     });
+  }, []);
+
+  useEffect(() => {
+    if (sheet) loadBilling();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadBilling = async () => {
@@ -42,11 +47,9 @@ export default function DQBilling() {
   };
 
   function reset() {
-    setSheet("");
-    setRows([]);
-    setFilter("ALL");
-    setPage(1);
-    setMsg("");
+    setSheet(""); setRows([]); setFilter("ALL"); setPage(1); setMsg("");
+    localStorage.removeItem("sarn_admin_dq_bill_sheet");
+    localStorage.removeItem("sarn_admin_dq_bill_filter");
   }
 
   const filteredRows = rows.filter((r) => {
@@ -73,12 +76,12 @@ export default function DQBilling() {
 
       {/* Controls */}
       <div style={controlsBar}>
-        <select value={sheet} onChange={(e) => setSheet(e.target.value)} style={sel}>
+        <select value={sheet} onChange={(e) => { setSheet(e.target.value); localStorage.setItem("sarn_admin_dq_bill_sheet", e.target.value); }} style={sel}>
           <option value="">Select DQ Sheet</option>
           {sheets.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <button onClick={loadBilling} style={primaryBtn}>Load</button>
-        <select value={filter} onChange={(e) => { setFilter(e.target.value); setPage(1); }} style={sel}>
+        <select value={filter} onChange={(e) => { setFilter(e.target.value); localStorage.setItem("sarn_admin_dq_bill_filter", e.target.value); setPage(1); }} style={sel}>
           <option value="ALL">All</option>
           <option value="READY">Billing Ready</option>
           <option value="NOT_READY">Not Ready</option>
@@ -106,7 +109,7 @@ export default function DQBilling() {
           <Empty>{rows.length === 0 ? "Select a sheet and click Load" : "No records match the selected filter."}</Empty>
         ) : (
           <>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#fff" }}>
                   {["SL No", "Repo ID", "Chemical Product", "Manufacturer", "Billing Status", "View"].map(h => (

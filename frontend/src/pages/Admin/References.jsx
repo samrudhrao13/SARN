@@ -208,7 +208,7 @@ export default function References() {
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#fff", position: "sticky", top: 0, zIndex: 2 }}>
-                  {["SL No", "Reference ID", "Business Entity", "Repository No", "Workflow Status"].map(h => (
+                  {["SL No", "Reference ID", "Chemical Product", "Manufacturer Name", "Workflow Status"].map(h => (
                     <th key={h} style={th}>{h}</th>
                   ))}
                 </tr>
@@ -229,8 +229,8 @@ export default function References() {
                         {(page - 1) * PAGE_SIZE + i + 1}
                       </td>
                       <td style={{ ...td, fontWeight: 700, color: "#0f172a" }}>{refId}</td>
-                      <td style={td}>{ref.common?.businessEntity || "-"}</td>
-                      <td style={td}>{ref.common?.repositoryNumber || "-"}</td>
+                      <td style={td}>{ref.common?.chemicalProduct || "-"}</td>
+                      <td style={td}>{ref.common?.manufacturerName || "-"}</td>
                       <td style={td}>
                         <span style={{
                           display: "inline-block", padding: "3px 10px", borderRadius: 4,

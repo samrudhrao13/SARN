@@ -1,0 +1,14 @@
+{
+  "name": "sarn-technologies",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "concurrently --names \"BACKEND,FRONTEND,SCANNER\" --prefix-colors \"blue,green,yellow\" \"npm run backend\" \"npm run frontend\" \"npm run scanner\"",
+    "backend":  "node backend/server.js",
+    "frontend": "cd frontend && npm run dev",
+    "scanner":  "cd sds-scanner && python app.py"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

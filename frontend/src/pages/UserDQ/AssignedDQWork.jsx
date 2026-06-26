@@ -4,17 +4,42 @@ import api from "../../config/apiClient";
 
 const PAGE_SIZE = 100;
 
+function DueDateBadge({ dueDate }) {
+  if (!dueDate) return <span style={{ color: "#9ca3af", fontSize: 11 }}>—</span>;
+  const due  = new Date(dueDate + "T00:00:00Z");
+  const now  = new Date(); now.setUTCHours(0, 0, 0, 0);
+  const days = Math.ceil((due - now) / 86400000);
+  let bg, color, icon;
+  if (days < 0)       { bg = "#fef2f2"; color = "#dc2626"; icon = "🔴"; }
+  else if (days <= 2) { bg = "#fff7ed"; color = "#ea580c"; icon = "🟠"; }
+  else if (days <= 7) { bg = "#fefce8"; color = "#ca8a04"; icon = "🟡"; }
+  else                { bg = "#f0fdf4"; color = "#16a34a"; icon = "🟢"; }
+  const label = days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? "Due today" : `${days}d left`;
+  return (
+    <span style={{ background: bg, color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {icon} {dueDate} · {label}
+    </span>
+  );
+}
+
 export default function AssignedDQWork() {
   const navigate = useNavigate();
   const user   = JSON.parse(localStorage.getItem("sarnUser") || "null");
   const userId = user?.userId;
 
   const [tasks, setTasks]   = useState([]);
-  const [sheet, setSheet]   = useState("");
-  const [search, setSearch] = useState("");
+  const [sheet, setSheet]   = useState(() => localStorage.getItem("sarn_dq_sheet") || "");
+  const [search, setSearch] = useState(() => localStorage.getItem("sarn_dq_search") || "");
   const [page, setPage]     = useState(1);
   const [total, setTotal]   = useState(0);
   const [loading, setLoading] = useState(true);
+  const [sheetDueDates, setSheetDueDates] = useState({});
+
+  useEffect(() => {
+    api.get("/sheets/due-dates").then(res => {
+      if (res.data.ok) setSheetDueDates(res.data.dq || {});
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
@@ -53,8 +78,8 @@ export default function AssignedDQWork() {
       <h1 style={{ margin: "0 0 16px", fontSize: 22, fontWeight: 700, color: "#0f172a" }}>My DQ Tasks</h1>
 
       <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <input placeholder="Filter by sheet" value={sheet} onChange={e => setSheet(e.target.value)} style={inp} />
-        <input placeholder="Search Repo ID"  value={search} onChange={e => setSearch(e.target.value)} style={inp} />
+        <input placeholder="Filter by sheet" value={sheet} onChange={e => { setSheet(e.target.value); localStorage.setItem("sarn_dq_sheet", e.target.value); }} style={inp} />
+        <input placeholder="Search Repo ID"  value={search} onChange={e => { setSearch(e.target.value); localStorage.setItem("sarn_dq_search", e.target.value); }} style={inp} />
         <button onClick={() => loadTasks(1)} style={primaryBtn} disabled={loading}>Apply Filters</button>
         <span style={{ marginLeft: "auto", fontSize: 13, color: "#64748b" }}>
           Page {page} / {Math.ceil(total / PAGE_SIZE) || 1} &nbsp;({total} records)
@@ -68,6 +93,7 @@ export default function AssignedDQWork() {
           <thead>
             <tr>
               <th style={th}>Sheet</th>
+              <th style={th}>Due Date</th>
               <th style={th}>Repo ID</th>
               <th style={th}>Status</th>
               <th style={th}>Assigned To</th>
@@ -76,10 +102,11 @@ export default function AssignedDQWork() {
           </thead>
           <tbody>
             {tasks.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: "center", padding: 20, color: "#64748b" }}>No DQ tasks found.</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: "center", padding: 20, color: "#64748b" }}>No DQ tasks found.</td></tr>
             ) : tasks.map((t, i) => (
               <tr key={`${t.sheet}_${t.repoId}`} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
                 <td style={td}>{t.sheet}</td>
+                <td style={td}><DueDateBadge dueDate={sheetDueDates[t.sheet]} /></td>
                 <td style={td}>{t.repoId}</td>
                 <td style={td}><span style={assignedBadge}>{t.status || "assigned"}</span></td>
                 <td style={td}>{t.assignedTo || "-"}</td>

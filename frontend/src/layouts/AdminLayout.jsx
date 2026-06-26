@@ -2,6 +2,7 @@
 import React from "react";
 import AdminSidebar from "../components/AdminSidebar";
 import ChatBot from "../components/ChatBot";
+import CallNotificationOverlay from "../components/CallNotificationOverlay";
 
 export default function AdminLayout({ children }) {
   return (
@@ -33,6 +34,7 @@ export default function AdminLayout({ children }) {
 
       {/* Floating Translation Assistant */}
       <ChatBot />
+      <CallNotificationOverlay />
     </div>
   );
 }

@@ -94,13 +94,16 @@ export default function BatchReport() {
 
       {/* Summary Cards */}
       {data && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12, marginBottom: 24 }}>
-          <StatCard label="Total Assigned"               value={t.totalAssigned}                                               color="#3b82f6" bg="#eff6ff" />
-          <StatCard label="All-Time Completed"           value={t.allTimeCompleted}                                            color="#16a34a" bg="#f0fdf4" />
-          <StatCard label={`Completed (${periodLabel})`} value={t.totalCompleted}                                              color="#0891b2" bg="#ecfeff" />
-          <StatCard label="Total Pending"                value={Math.max(0,(t.totalAssigned||0)-(t.allTimeCompleted||0))}     color="#f59e0b" bg="#fef3c7" />
-          <StatCard label="Active Users"                 value={uniqueUserCount}                                               color="#8b5cf6" bg="#ede9fe" />
-        </div>
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+            <StatCard label="Total Assigned"               value={t.totalAssigned}                                               color="#3b82f6" bg="#eff6ff" />
+            <StatCard label="All-Time Completed"           value={t.allTimeCompleted}                                            color="#16a34a" bg="#f0fdf4" />
+            <StatCard label={`Completed (${periodLabel})`} value={t.totalCompleted}                                              color="#0891b2" bg="#ecfeff" />
+            <StatCard label="Total Pending"                value={Math.max(0,(t.totalAssigned||0)-(t.allTimeCompleted||0))}     color="#f59e0b" bg="#fef3c7" />
+            <StatCard label="Active Users"                 value={uniqueUserCount}                                               color="#8b5cf6" bg="#ede9fe" />
+          </div>
+          <SheetProgressBars rows={allRows} assignedKey="assigned" completedKey="allTimeCompleted" />
+        </>
       )}
 
       {/* Table */}
@@ -239,6 +242,55 @@ export default function BatchReport() {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function SheetProgressBars({ rows, assignedKey = "assigned", completedKey = "allTimeCompleted" }) {
+  const sheetMap = {};
+  rows.forEach(row => {
+    const sid = row.sheetId;
+    if (!sheetMap[sid]) sheetMap[sid] = { assigned: 0, completed: 0 };
+    sheetMap[sid].assigned  += row[assignedKey]  || 0;
+    sheetMap[sid].completed += row[completedKey] || 0;
+  });
+  const sheets = Object.entries(sheetMap).map(([id, v]) => ({
+    id, label: id.replace(/_/g, " "),
+    assigned: v.assigned,
+    completed: v.completed,
+    pending: Math.max(0, v.assigned - v.completed),
+    pct: v.assigned ? Math.round((v.completed / v.assigned) * 100) : 0,
+  })).sort((a, b) => b.assigned - a.assigned).filter(s => s.pending > 0);
+
+  if (sheets.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>
+        Business Completion Progress
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
+        {sheets.map(s => (
+          <div key={s.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: "12px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>{s.label}</span>
+              <span style={{ fontWeight: 800, fontSize: 16, color: s.pct >= 80 ? "#16a34a" : s.pct >= 50 ? "#d97706" : "#dc2626" }}>{s.pct}%</span>
+            </div>
+            <div style={{ height: 10, background: "#e2e8f0", borderRadius: 5, overflow: "hidden", marginBottom: 6 }}>
+              <div style={{
+                width: `${s.pct}%`, height: "100%", borderRadius: 5,
+                background: s.pct >= 80 ? "#16a34a" : s.pct >= 50 ? "#f59e0b" : "#dc2626",
+                transition: "width 0.4s ease",
+              }} />
+            </div>
+            <div style={{ display: "flex", gap: 14, fontSize: 11, color: "#64748b" }}>
+              <span>{s.assigned} total</span>
+              <span style={{ color: "#16a34a", fontWeight: 600 }}>✓ {s.completed} done</span>
+              <span style={{ color: "#dc2626", fontWeight: 600 }}>⏳ {s.pending} pending</span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

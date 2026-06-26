@@ -205,22 +205,17 @@ export default function BatchAssign() {
           <Empty>{records.length === 0 ? "Select a sheet to load records" : "No records match the current filters."}</Empty>
         ) : (
           <>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1300px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#fff", position: "sticky", top: 0, zIndex: 2 }}>
                   <th style={th}>#</th>
                   <th style={th}>Select</th>
                   <th style={th}>Repo No.</th>
-                  <th style={th}>Dup</th>
+                  <th style={th}>Duplicates</th>
                   <th style={{ ...th, minWidth: 200 }}>Chemical Name</th>
                   <th style={{ ...th, minWidth: 180 }}>Manufacturer</th>
                   <th style={th}>Revision Date</th>
-                  <th style={{ ...th, minWidth: 160 }}>Site Name</th>
-                  <th style={th}>Country</th>
                   <th style={th}>Language</th>
-                  <th style={th}>Product Code</th>
-                  <th style={{ ...th, minWidth: 160 }}>PDF File Name</th>
-                  <th style={{ ...th, minWidth: 160 }}>Comments</th>
                   <th style={th}>Workflow Status</th>
                   <th style={th}>Assigned To</th>
                   <th style={th}>Action</th>
@@ -260,16 +255,11 @@ export default function BatchAssign() {
                     <td style={ellTd} title={r.chemicalName}>{r.chemicalName || "-"}</td>
                     <td style={ellTd} title={r.manufacturerName}>{r.manufacturerName || "-"}</td>
                     <td style={td}>{r.revisionDate || "-"}</td>
-                    <td style={ellTd} title={r.siteName}>{r.siteName || "-"}</td>
-                    <td style={td}>{r.manufacturerCountry || "-"}</td>
                     <td style={td}>
                       {r.language
                         ? <span style={langBadge(r.language)}>{r.language}</span>
                         : "-"}
                     </td>
-                    <td style={td}>{r.productCode || "-"}</td>
-                    <td style={ellTd} title={r.pdfFileName}>{r.pdfFileName || "-"}</td>
-                    <td style={ellTd} title={r.comments}>{r.comments || "-"}</td>
                     <td style={td}>
                       <span style={statusBadge(r.status)}>{r.status || "-"}</span>
                     </td>
@@ -374,7 +364,7 @@ const secBtn      = { padding: "8px 14px", borderRadius: 8, border: "1px solid #
 const assignBtn   = { padding: "8px 18px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" };
 const msgBox      = { padding: "10px 16px", background: "#eff6ff", color: "#1d4ed8", borderRadius: 8, fontWeight: 600, marginBottom: 12, fontSize: 13 };
 const statsBar    = { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 };
-const tableWrap   = { background: "#fff", borderRadius: 10, border: "1px solid #e2e8f0", overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 360px)" };
+const tableWrap   = { background: "#fff", borderRadius: 10, border: "1px solid #e2e8f0", overflowX: "auto", overflowY: "auto", height: "calc(100vh - 310px)" };
 const th          = { padding: "10px 12px", textAlign: "left", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" };
 const td          = { padding: "8px 12px", borderBottom: "1px solid #f1f5f9", fontSize: 12, verticalAlign: "middle" };
 const ellTd       = { ...td, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };

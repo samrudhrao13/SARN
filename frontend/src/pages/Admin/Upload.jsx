@@ -10,6 +10,7 @@ const normalize = (s) =>
 
 export default function Upload() {
   const [sheet, setSheet] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -18,6 +19,11 @@ export default function Upload() {
   const handleUpload = async () => {
     if (!sheet.trim()) {
       setStatus("⚠️ Sheet name required");
+      return;
+    }
+
+    if (!dueDate) {
+      setStatus("⚠️ Due date is required");
       return;
     }
 
@@ -31,6 +37,7 @@ export default function Upload() {
 
     const fd = new FormData();
     fd.append("sheet", normalize(sheet));
+    fd.append("dueDate", dueDate);
     fd.append("file", file);
 
     try {
@@ -78,6 +85,14 @@ export default function Upload() {
           placeholder="e.g. MASTER_SDS_JAN"
           value={sheet}
           onChange={(e) => setSheet(e.target.value)}
+        />
+
+        <label style={label}>Due Date <span style={{ color: "#dc2626" }}>*</span></label>
+        <input
+          type="date"
+          style={input}
+          value={dueDate}
+          onChange={(e) => setDueDate(e.target.value)}
         />
 
         <label style={label}>Excel File</label>

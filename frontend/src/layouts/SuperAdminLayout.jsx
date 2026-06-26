@@ -1,6 +1,7 @@
 // src/layouts/SuperAdminLayout.jsx
 import React from "react";
 import SuperAdminSidebar from "../components/SuperAdminSidebar";
+import CallNotificationOverlay from "../components/CallNotificationOverlay";
 
 export default function SuperAdminLayout({ children }) {
   return (
@@ -19,6 +20,7 @@ export default function SuperAdminLayout({ children }) {
       >
         {children}
       </div>
+      <CallNotificationOverlay />
     </div>
   );
 }

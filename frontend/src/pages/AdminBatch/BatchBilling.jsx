@@ -129,7 +129,7 @@ export default function BatchBilling() {
           <Empty>{rows.length === 0 ? "Select a sheet to view billing records" : "No records match the search."}</Empty>
         ) : (
           <>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 800 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#fff" }}>
                   {["SL No", "Repository No", "Chemical Name", "Manufacturer", "Site Name", "Verified By", "Date Verified", "Action"].map(h => (
@@ -198,7 +198,7 @@ const controlsBar = { display: "flex", gap: 10, alignItems: "center", flexWrap: 
 const sel         = { padding: "8px 12px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: 14 };
 const resetBtn    = { padding: "8px 18px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", fontWeight: 600, cursor: "pointer", fontSize: 14 };
 const statsBar    = { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 };
-const tableWrap   = { background: "#fff", borderRadius: 10, border: "1px solid #e2e8f0", overflowX: "auto" };
+const tableWrap   = { background: "#fff", borderRadius: 10, border: "1px solid #e2e8f0", overflowX: "auto", overflowY: "auto", height: "calc(100vh - 210px)" };
 const th          = { padding: "10px 14px", textAlign: "left", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" };
 const td          = { padding: "9px 14px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle", fontSize: 13 };
 const pageBar     = { display: "flex", gap: 12, alignItems: "center", padding: "12px 16px", borderTop: "1px solid #f1f5f9" };

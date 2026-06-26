@@ -8,7 +8,7 @@ export default function Workflow() {
   const navigate = useNavigate();
 
   const [sheets, setSheets] = useState([]);
-  const [sheet, setSheet] = useState("");
+  const [sheet, setSheet] = useState(() => localStorage.getItem("sarn_admin_sds_wf_sheet") || "");
   const [rows, setRows] = useState([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -96,6 +96,7 @@ export default function Workflow() {
           value={sheet}
           onChange={(e) => {
             setSheet(e.target.value);
+            localStorage.setItem("sarn_admin_sds_wf_sheet", e.target.value);
             setPage(1);
           }}
           style={input}

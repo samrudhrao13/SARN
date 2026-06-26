@@ -15,6 +15,8 @@ import Database from "./pages/Admin/Database";
 import WorkflowDetails from "./pages/Admin/WorkflowDetails";
 import SDSBilling from "./pages/Admin/SDSBilling";
 import SDSReports from "./pages/Admin/SDSReports";
+import SDSScanner from "./pages/Admin/SDSScanner";
+import Notifications from "./pages/SuperAdmin/Notifications";
 
 /* ================= ADMIN (DQ) ================= */
 import DQDashboard from "./pages/AdminDQ/DQDashboard";
@@ -33,6 +35,11 @@ import BatchUpload from "./pages/AdminBatch/BatchUpload";
 import BatchAssign from "./pages/AdminBatch/BatchAssign";
 import BatchBilling from "./pages/AdminBatch/BatchBilling";
 import BatchReport from "./pages/AdminBatch/BatchReport";
+import BatchWorkflowControl from "./pages/AdminBatch/BatchWorkflowControl";
+
+/* ================= CALLS & MEETINGS (ALL ROLES) ================= */
+import CallsMeetings from "./pages/CallsMeetings";
+import CallRoom from "./pages/User/CallRoom";
 
 /* ================= USER (SDS) ================= */
 import UserDashboard from "./pages/User/UserDashboard";
@@ -99,6 +106,12 @@ const ProtectedAdmin = ({ children }) => {
   if (role === "admin" || role === "superadmin") return children;
 
   return <Navigate to="/login" replace />;
+};
+
+const ProtectedAny = ({ children }) => {
+  const user = getUser();
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
 };
 
 const ProtectedSuperAdmin = ({ children }) => {
@@ -257,8 +270,21 @@ export default function App() {
           }
         />
 
-      <Route path="/admin/sds/billing" element={<ProtectedAdmin><AdminLayout><SDSBilling /></AdminLayout></ProtectedAdmin>} />
-      <Route path="/admin/sds/reports" element={<ProtectedAdmin><AdminLayout><SDSReports /></AdminLayout></ProtectedAdmin>} />
+        <Route
+          path="/admin/batch/workflow"
+          element={
+            <ProtectedAdmin>
+              <AdminLayout>
+                <BatchWorkflowControl />
+              </AdminLayout>
+            </ProtectedAdmin>
+          }
+        />
+
+      <Route path="/admin/sds/billing"  element={<ProtectedAdmin><AdminLayout><SDSBilling /></AdminLayout></ProtectedAdmin>} />
+      <Route path="/admin/sds/reports"  element={<ProtectedAdmin><AdminLayout><SDSReports /></AdminLayout></ProtectedAdmin>} />
+      <Route path="/admin/sds/scanner" element={<ProtectedAdmin><AdminLayout><SDSScanner /></AdminLayout></ProtectedAdmin>} />
+      <Route path="/super-admin/notifications" element={<ProtectedSuperAdmin><SuperAdminLayout><Notifications /></SuperAdminLayout></ProtectedSuperAdmin>} />
 
       {/* ===== ADMIN (DQ) ===== */}
       <Route path="/admin/dq/dashboard" element={<ProtectedAdmin><AdminLayout><DQDashboard /></AdminLayout></ProtectedAdmin>} />
@@ -270,6 +296,14 @@ export default function App() {
       <Route path="/admin/dq/billing" element={<ProtectedAdmin><AdminLayout><DQBilling /></AdminLayout></ProtectedAdmin>} />
       <Route path="/admin/dq/database" element={<ProtectedAdmin><AdminLayout><DQDatabase /></AdminLayout></ProtectedAdmin>} />
       <Route path="/admin/dq/view/:repoId" element={<ProtectedAdmin><AdminLayout><DQView /></AdminLayout></ProtectedAdmin>} />
+
+      {/* ===== CALL ROOM — universal, full-screen, no layout ===== */}
+      <Route path="/call/:roomId" element={<ProtectedAny><CallRoom /></ProtectedAny>} />
+
+      {/* ===== CALLS & MEETINGS — all roles ===== */}
+      <Route path="/admin/calls" element={<ProtectedAdmin><AdminLayout><CallsMeetings /></AdminLayout></ProtectedAdmin>} />
+      <Route path="/super-admin/calls" element={<ProtectedSuperAdmin><SuperAdminLayout><CallsMeetings /></SuperAdminLayout></ProtectedSuperAdmin>} />
+      <Route path="/user/calls" element={<ProtectedUser><UserLayout><CallsMeetings /></UserLayout></ProtectedUser>} />
 
       {/* ===== USER (SDS) ===== */}
       <Route path="/user/dashboard" element={<ProtectedUser><UserLayout><UserDashboard /></UserLayout></ProtectedUser>} />

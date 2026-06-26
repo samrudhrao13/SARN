@@ -2,6 +2,7 @@
 import React from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import api from "../config/apiClient";
+import StatusPicker from "./StatusPicker";
 
 export default function UserSidebar() {
   const navigate = useNavigate();
@@ -36,10 +37,14 @@ const process = location.pathname.startsWith("/user/dq")
     location.pathname.startsWith(path + "/")
   );
 }
+
   return (
     <div style={container}>
-      
-      <h2 style={{ marginBottom: 20 }}>SARN TECHNOLOGIES</h2>
+
+      <h2 style={{ marginBottom: 14 }}>SARN TECHNOLOGIES</h2>
+
+      {/* ===== STATUS PICKER ===== */}
+      <StatusPicker />
 
       {/* ===== PROCESS SWITCH ===== */}
       <div
@@ -97,23 +102,10 @@ const process = location.pathname.startsWith("/user/dq")
       {/* ===== SDS MENU ===== */}
       {process === "SDS" && (
         <>
-          <SidebarBtn
-            label="Assigned SDS Work"
-            path="/user/assigned-sds"
-            active={isActive("/user/assigned-sds")}
-          />
-          <SidebarBtn
-              label="Completed Work"
-              path="/user/completed-sds"
-              active={isActive("/user/completed-sds")}
-            />
-
-          <SidebarBtn
-            label="Profile"
-            path="/user/profile"
-            active={isActive("/user/profile")}
-          />
-
+          <SidebarBtn label="Assigned SDS Work" path="/user/assigned-sds" active={isActive("/user/assigned-sds")} />
+          <SidebarBtn label="Completed Work" path="/user/completed-sds" active={isActive("/user/completed-sds")} />
+          <SidebarBtn label="Profile" path="/user/profile" active={isActive("/user/profile")} />
+          <SidebarBtn label="📞 Calls & Meetings" path="/user/calls" active={isActive("/user/calls")} />
           <LogoutBtn />
         </>
       )}
@@ -121,51 +113,23 @@ const process = location.pathname.startsWith("/user/dq")
       {/* ===== DQ MENU ===== */}
       {process === "DQ" && (
         <>
-          <SidebarBtn
-            label="Assigned DQ Work"
-            path="/user/dq/tasks"
-            active={isActive("/user/dq/tasks")}
-          />
-
-          <SidebarBtn
-            label="Completed DQ Work"
-            path="/user/dq/completed"
-            active={isActive("/user/dq/completed")}
-          />
-
-          <SidebarBtn
-            label="Profile"
-            path="/user/profile"
-            active={isActive("/user/profile")}
-          />
-
+          <SidebarBtn label="Assigned DQ Work" path="/user/dq/tasks" active={isActive("/user/dq/tasks")} />
+          <SidebarBtn label="Completed DQ Work" path="/user/dq/completed" active={isActive("/user/dq/completed")} />
+          <SidebarBtn label="Profile" path="/user/profile" active={isActive("/user/profile")} />
+          <SidebarBtn label="📞 Calls & Meetings" path="/user/calls" active={isActive("/user/calls")} />
           <LogoutBtn />
         </>
       )}
-    
+
       {process === "BATCH" && (
-  <>
-    <SidebarBtn
-      label="Assigned Batch Work"
-      path="/user/batch/tasks"
-      active={isActive("/user/batch/tasks")}
-    />
-
-    <SidebarBtn
-      label="Completed Batch"
-      path="/user/batch/completed"
-      active={isActive("/user/batch/completed")}
-    />
-
-    <SidebarBtn
-      label="Profile"
-      path="/user/profile"
-      active={isActive("/user/profile")}
-    />
-
-    <LogoutBtn />
-  </>
-)}
+        <>
+          <SidebarBtn label="Assigned Batch Work" path="/user/batch/tasks" active={isActive("/user/batch/tasks")} />
+          <SidebarBtn label="Completed Batch" path="/user/batch/completed" active={isActive("/user/batch/completed")} />
+          <SidebarBtn label="Profile" path="/user/profile" active={isActive("/user/profile")} />
+          <SidebarBtn label="📞 Calls & Meetings" path="/user/calls" active={isActive("/user/calls")} />
+          <LogoutBtn />
+        </>
+      )}
     </div>
   );
 }

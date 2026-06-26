@@ -22,9 +22,16 @@ export default function AssignedSDSWork() {
 
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [stageFilter, setStageFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [sheetFilter, setSheetFilter] = useState("");
+  const [sheetDueDates, setSheetDueDates] = useState({});
+  const [stageFilter, setStageFilter] = useState(() => localStorage.getItem("sarn_sds_stage") || "");
+  const [statusFilter, setStatusFilter] = useState(() => localStorage.getItem("sarn_sds_status") || "");
+  const [sheetFilter, setSheetFilter] = useState(() => localStorage.getItem("sarn_sds_sheet") || "");
+
+  useEffect(() => {
+    api.get("/sheets/due-dates").then(res => {
+      if (res.data.ok) setSheetDueDates(res.data.sds || {});
+    }).catch(() => {});
+  }, []);
 
   /* ================= LOAD TASKS ================= */
   useEffect(() => {
@@ -100,7 +107,7 @@ export default function AssignedSDSWork() {
   <select
   style={filterInput}
   value={sheetFilter}
-  onChange={(e) => setSheetFilter(e.target.value)}
+  onChange={(e) => { setSheetFilter(e.target.value); localStorage.setItem("sarn_sds_sheet", e.target.value); }}
 >
     <option value="">All Sheets</option>
     {[...new Set(tasks.map(t => t.sheet))].map(s => (
@@ -114,7 +121,7 @@ export default function AssignedSDSWork() {
   <select
   style={filterInput}
   value={stageFilter}
-  onChange={(e) => setStageFilter(e.target.value)}
+  onChange={(e) => { setStageFilter(e.target.value); localStorage.setItem("sarn_sds_stage", e.target.value); }}
 >
     <option value="">All Stages</option>
     <option value="search">Search</option>
@@ -127,7 +134,7 @@ export default function AssignedSDSWork() {
   <select
   style={filterInput}
   value={statusFilter}
-  onChange={(e) => setStatusFilter(e.target.value)}
+  onChange={(e) => { setStatusFilter(e.target.value); localStorage.setItem("sarn_sds_status", e.target.value); }}
 >
     <option value="">All Status</option>
     <option value="pending">Pending</option>
@@ -140,9 +147,10 @@ export default function AssignedSDSWork() {
   <button
     style={clearFilterBtn}
     onClick={() => {
-      setSheetFilter("");
-      setStageFilter("");
-      setStatusFilter("");
+      setSheetFilter(""); setStageFilter(""); setStatusFilter("");
+      localStorage.removeItem("sarn_sds_sheet");
+      localStorage.removeItem("sarn_sds_stage");
+      localStorage.removeItem("sarn_sds_status");
     }}
   >
     Clear Filters
@@ -162,6 +170,7 @@ export default function AssignedSDSWork() {
               <th style={th}>Reference ID</th>
               <th style={th}>Company</th>
               <th style={th}>Sheet</th>
+              <th style={th}>Due Date</th>
               <th style={th}>Stage</th>
               <th style={th}>Status</th>
               <th style={th}>Action</th>
@@ -178,6 +187,10 @@ export default function AssignedSDSWork() {
                 <td style={td}>{t.referenceId}</td>
                 <td style={td}>{t.company || "SARN"}</td>
                 <td style={td}>{normalizeSheet(t.sheet)}</td>
+
+                <td style={td}>
+                  <DueDateBadge dueDate={sheetDueDates[normalizeSheet(t.sheet)]} />
+                </td>
 
                 <td style={td}>
                   <StageBadge stage={stage} />
@@ -206,6 +219,27 @@ export default function AssignedSDSWork() {
 }
 
 /* ================= UI HELPERS ================= */
+
+function DueDateBadge({ dueDate }) {
+  if (!dueDate) return <span style={{ color: "#9ca3af", fontSize: 11 }}>—</span>;
+  const due  = new Date(dueDate + "T00:00:00Z");
+  const now  = new Date(); now.setUTCHours(0, 0, 0, 0);
+  const days = Math.ceil((due - now) / 86400000);
+  let bg, color, icon;
+  if (days < 0)       { bg = "#fef2f2"; color = "#dc2626"; icon = "🔴"; }
+  else if (days <= 2) { bg = "#fff7ed"; color = "#ea580c"; icon = "🟠"; }
+  else if (days <= 7) { bg = "#fefce8"; color = "#ca8a04"; icon = "🟡"; }
+  else                { bg = "#f0fdf4"; color = "#16a34a"; icon = "🟢"; }
+  const label = days < 0
+    ? `${Math.abs(days)}d overdue`
+    : days === 0 ? "Due today"
+    : `${days}d left`;
+  return (
+    <span style={{ background: bg, color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+      {icon} {dueDate} · {label}
+    </span>
+  );
+}
 
 function StageBadge({ stage }) {
   const colors = {

@@ -3,6 +3,7 @@ import api from "../../config/apiClient";
 
 export default function DQUpload() {
   const [sheet, setSheet] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -16,6 +17,11 @@ export default function DQUpload() {
       return;
     }
 
+    if (!dueDate) {
+      setStatus("⚠️ Due date is required");
+      return;
+    }
+
     if (!file) {
       setStatus("⚠️ Please select an Excel file");
       return;
@@ -25,6 +31,7 @@ export default function DQUpload() {
 
     const fd = new FormData();
     fd.append("sheet", sheet.trim());
+    fd.append("dueDate", dueDate);
     fd.append("file", file);
 
     try {
@@ -65,6 +72,19 @@ export default function DQUpload() {
             placeholder="DQ Sheet name (e.g. DQ_MASTER_JAN)"
             style={input}
           />
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>
+              Due Date <span style={{ color: "#dc2626" }}>*</span>
+            </label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              style={input}
+              required
+            />
+          </div>
 
           <input
             type="file"

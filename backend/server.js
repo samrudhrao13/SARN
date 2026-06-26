@@ -7,6 +7,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const XLSX = require("xlsx");
+const { google } = require("googleapis");
 
 // ================== FIREBASE INIT (PRODUCTION) ==================
 const admin = require("firebase-admin");
@@ -23,6 +24,36 @@ const bucket = admin.storage().bucket(
 );
 console.log("BUCKET:", bucket.name);
 
+
+// ================== GOOGLE MEET ==================
+async function createGoogleMeetLink(title = "SARN Call", startISO, endISO, description = "") {
+  const now = new Date();
+  const start = startISO ? new Date(startISO) : now;
+  const end   = endISO   ? new Date(endISO)   : new Date(now.getTime() + 2 * 60 * 60 * 1000);
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+  auth.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+  const calendar = google.calendar({ version: "v3", auth });
+  const requestId = `sarn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const event = await calendar.events.insert({
+    calendarId: "primary",
+    conferenceDataVersion: 1,
+    requestBody: {
+      summary: title,
+      description,
+      start: { dateTime: start.toISOString(), timeZone: "Asia/Kolkata" },
+      end:   { dateTime: end.toISOString(),   timeZone: "Asia/Kolkata" },
+      conferenceData: {
+        createRequest: { requestId, conferenceSolutionKey: { type: "hangoutsMeet" } },
+      },
+    },
+  });
+  return event.data.hangoutLink
+    || event.data.conferenceData?.entryPoints?.find(e => e.entryPointType === "video")?.uri
+    || null;
+}
 
 // ================== EXPRESS ==================
 const app = express();
@@ -337,7 +368,7 @@ async function markLogin(user) {
       ],
 
       totalMinutes: 0,
-      expectedMinutes: 420,
+      expectedMinutes: 480,
       status: "IN_PROGRESS",
       lastUpdated: now,
     });
@@ -411,64 +442,261 @@ app.post("/auth/logout", async (req, res) => {
 });
 
 
-// ================= SUPER ADMIN: VIEW ATTENDANCE =================
+// ============================================================================
+// SUPER ADMIN: FETCH ATTENDANCE (enhanced with derived fields)
+// ============================================================================
 app.get("/super-admin/attendance", async (req, res) => {
   try {
     const { date, month } = req.query;
+    const IST_MS = 5.5 * 60 * 60 * 1000;
 
     let query = db.collection("attendance_logs");
-
     if (date) {
       query = query.where("date", "==", date);
-    }
-
-    if (month) {
+    } else if (month) {
       query = query
         .where("date", ">=", `${month}-01`)
         .where("date", "<=", `${month}-31`);
     }
 
     const snap = await query.get();
-    const rows = snap.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
 
-    res.json({ ok: true, rows });
-  } catch (err) {
-    console.error("ATTENDANCE FETCH ERROR:", err);
-    res.status(500).json({ ok: false });
-  }
-});
+    const rows = snap.docs.map(doc => {
+      const d = doc.data();
+      const sessions = d.sessions || [];
+      const totalMinutes = d.totalMinutes || 0;
 
-// ============================================================================
-// SUPER ADMIN: FETCH ATTENDANCE (WITH DATE / MONTH FILTER)
-// ============================================================================
+      // 24-element boolean array (IST): is user active in each hour?
+      const hourlyActivity = new Array(24).fill(false);
+      for (const s of sessions) {
+        const startMs = (s.loginTime || 0) + IST_MS;
+        const endMs = (s.logoutTime || Date.now()) + IST_MS;
+        const startHour = Math.floor((startMs % 86400000) / 3600000);
+        const endHour = Math.floor((endMs % 86400000) / 3600000);
+        let h = startHour;
+        for (let i = 0; i <= 24; i++) {
+          hourlyActivity[h % 24] = true;
+          if (h % 24 === endHour) break;
+          h++;
+        }
+      }
 
-app.get("/super-admin/attendance", async (req, res) => {
-  try {
-    const { date, month } = req.query;
+      // Late start: first login after 9:30 IST
+      const firstSession = sessions[0];
+      const lastSession = sessions[sessions.length - 1];
+      let lateStart = false;
+      if (firstSession?.loginTime) {
+        const t = new Date(firstSession.loginTime + IST_MS);
+        const h = t.getUTCHours(), m = t.getUTCMinutes();
+        lateStart = h > 9 || (h === 9 && m > 30);
+      }
 
-    let query = db.collection("attendance_logs");
+      // Early logout: last logout before 17:00 IST and < 8 hrs worked
+      let earlyLogout = false;
+      if (lastSession?.logoutTime && totalMinutes < 480) {
+        const t = new Date(lastSession.logoutTime + IST_MS);
+        earlyLogout = t.getUTCHours() < 17;
+      }
 
-    if (date) {
-      query = query.where("date", "==", date);
-    }
+      // Currently active: last session has no logoutTime
+      const isCurrentlyActive = !!(lastSession && !lastSession.logoutTime);
+      const currentSessionMinutes = isCurrentlyActive
+        ? Math.floor((Date.now() - (lastSession.loginTime || Date.now())) / 60000)
+        : 0;
 
-    if (month) {
-     
-      query = query
-        .where("date", ">=", `${month}-01`)
-        .where("date", "<=", `${month}-31`);
-    }
-
-    const snap = await query.get();
-    const rows = snap.docs.map(d => d.data());
+      return {
+        id: doc.id,
+        ...d,
+        hourlyActivity,
+        lateStart,
+        earlyLogout,
+        firstLoginMs: firstSession?.loginTime || null,
+        lastLogoutMs: lastSession?.logoutTime || null,
+        isCurrentlyActive,
+        currentSessionMinutes,
+        liveTotalMinutes: totalMinutes + currentSessionMinutes,
+      };
+    });
 
     res.json({ ok: true, rows });
   } catch (err) {
     console.error("ATTENDANCE FETCH ERROR:", err);
     res.status(500).json({ ok: false, error: "Server error" });
+  }
+});
+
+// ============================================================================
+// ACTIVITY PING — user pings every few minutes to update lastActivityAt
+// ============================================================================
+app.post("/user/activity-ping", async (req, res) => {
+  try {
+    const userId = String(req.body.userId || "").trim().toUpperCase();
+    if (!userId) return res.json({ ok: false });
+    const today = new Date().toISOString().slice(0, 10);
+    const ref = db.collection("attendance_logs").doc(`${userId}_${today}`);
+    const snap = await ref.get();
+    if (snap.exists) await ref.update({ lastActivityAt: Date.now() });
+    res.json({ ok: true });
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
+// ============================================================================
+// ACTIVE USERS — currently logged-in users with idle detection
+// ============================================================================
+app.get("/super-admin/active-users", async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const snap = await db.collection("attendance_logs").where("date", "==", today).get();
+    const users = [];
+    snap.docs.forEach(doc => {
+      const d = doc.data();
+      const sessions = d.sessions || [];
+      const lastSession = sessions[sessions.length - 1];
+      if (!lastSession || lastSession.logoutTime) return;
+      const currentSessionMinutes = Math.floor((Date.now() - (lastSession.loginTime || Date.now())) / 60000);
+      const lastActivityAt = d.lastActivityAt || null;
+      const idleMinutes = lastActivityAt ? Math.floor((Date.now() - lastActivityAt) / 60000) : null;
+      users.push({
+        userId: d.userId,
+        name: d.name,
+        role: d.role,
+        totalMinutes: d.totalMinutes || 0,
+        currentSessionMinutes,
+        lastActivityAt,
+        idleMinutes,
+        loginTime: lastSession.loginTime,
+      });
+    });
+    res.json({ ok: true, users });
+  } catch (err) {
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ============================================================================
+// RECORDS TODAY — SDS + DQ + Batch completions today per user
+// ============================================================================
+app.get("/super-admin/records-today", async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const IST_MS = 5.5 * 60 * 60 * 1000;
+    const counts = {};
+
+    function addCount(userId, type) {
+      const id = String(userId || "").trim().toUpperCase();
+      if (!id) return;
+      if (!counts[id]) counts[id] = { sds: 0, dq: 0, batch: 0, total: 0 };
+      counts[id][type]++;
+      counts[id].total++;
+    }
+
+    function epochToDate(v) {
+      if (!v) return null;
+      const ms = typeof v === "number" ? v : (v._seconds ? v._seconds * 1000 : null);
+      if (!ms) return null;
+      return new Date(ms + IST_MS).toISOString().slice(0, 10);
+    }
+
+    const [sdsSheets, dqSheets, batchSheets] = await Promise.all([
+      db.collection("sds_sheets").get(),
+      db.collection("dq_sheets").get(),
+      db.collection("batch_sheets").get(),
+    ]);
+
+    for (const sheetDoc of sdsSheets.docs) {
+      const refs = await sheetDoc.ref.collection("references").get();
+      refs.forEach(doc => {
+        const d = doc.data();
+        for (const stage of ["search", "supersede", "transcription"]) {
+          const s = d[stage] || {};
+          if (s.completedBy && epochToDate(s.completedAt) === today) addCount(s.completedBy, "sds");
+        }
+      });
+    }
+
+    for (const sheetDoc of dqSheets.docs) {
+      const refs = await sheetDoc.ref.collection("references").get();
+      refs.forEach(doc => {
+        const d = doc.data();
+        if (d.billingReady && d.dateVerified === today && d.assignedTo) addCount(d.assignedTo, "dq");
+      });
+    }
+
+    for (const sheetDoc of batchSheets.docs) {
+      const records = await sheetDoc.ref.collection("records").get();
+      records.forEach(doc => {
+        const d = doc.data();
+        const v = d.verification || {};
+        if (v.status === "completed" && v.dateVerified === today && v.assignedTo) addCount(v.assignedTo, "batch");
+      });
+    }
+
+    res.json({ ok: true, counts });
+  } catch (err) {
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ============================================================================
+// STREAKS — consecutive days each user met the 8-hr target
+// ============================================================================
+app.get("/super-admin/streaks", async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+    const snap = await db.collection("attendance_logs")
+      .where("date", ">=", cutoffStr)
+      .where("date", "<=", today)
+      .get();
+
+    const userDays = {};
+    snap.docs.forEach(doc => {
+      const d = doc.data();
+      if (!userDays[d.userId]) userDays[d.userId] = {};
+      userDays[d.userId][d.date] = (d.totalMinutes || 0) >= 480;
+    });
+
+    const streaks = {};
+    for (const [userId, days] of Object.entries(userDays)) {
+      let streak = 0;
+      const check = new Date(today);
+      for (let i = 0; i < 90; i++) {
+        const ds = check.toISOString().slice(0, 10);
+        if (days[ds] === true) { streak++; check.setDate(check.getDate() - 1); }
+        else break;
+      }
+      streaks[userId] = streak;
+    }
+
+    res.json({ ok: true, streaks });
+  } catch (err) {
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ============================================================================
+// USER TODAY PROGRESS — for the user's own dashboard widget
+// ============================================================================
+app.get("/user/today-progress", async (req, res) => {
+  try {
+    const userId = String(req.query.userId || "").trim().toUpperCase();
+    if (!userId) return res.json({ ok: false });
+    const today = new Date().toISOString().slice(0, 10);
+    const snap = await db.collection("attendance_logs").doc(`${userId}_${today}`).get();
+    if (!snap.exists) return res.json({ ok: true, totalMinutes: 0, expectedMinutes: 480, isActive: false });
+    const d = snap.data();
+    const sessions = d.sessions || [];
+    const lastSession = sessions[sessions.length - 1];
+    const isActive = !!(lastSession && !lastSession.logoutTime);
+    const liveMinutes = (d.totalMinutes || 0) + (isActive ? Math.floor((Date.now() - lastSession.loginTime) / 60000) : 0);
+    res.json({ ok: true, totalMinutes: liveMinutes, expectedMinutes: 480, isActive, lastActivityAt: d.lastActivityAt || null });
+  } catch (err) {
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -508,14 +736,19 @@ async function cleanupOldAttendance() {
 app.post("/sds/upload", upload.single("file"), async (req, res) => {
   try {
     const sheet = String(req.body.sheet || "").trim();
+    const dueDate = String(req.body.dueDate || "").trim();
     if (!sheet || !req.file) {
       return res.json({ ok: false, error: "Sheet or file missing" });
+    }
+    if (!dueDate) {
+      return res.json({ ok: false, error: "Due date is required" });
     }
 
     await db.collection("sds_sheets").doc(sheet).set(
       {
         sheetId: sheet,
         updatedAt: Date.now(),
+        dueDate,
       },
       { merge: true }
     );
@@ -1414,6 +1647,7 @@ app.get("/sds/list", async (req, res) => {
         assignedTo: d.assignedTo || null,
         workflowStatus: d.workflowStatus || "",
 
+        common: d.common || null,
         search: d.search || null,
         supersede: d.supersede || null,
         transcription: d.transcription || null,
@@ -2043,59 +2277,74 @@ app.get("/user/work/:refId", async (req, res) => {
 //sds completed work
 app.get("/user/completed-sds-tasks", async (req, res) => {
   try {
-    let { userId } = req.query;
-
-    userId = String(userId || "")
-      .trim()
-      .toUpperCase();
+    const userId = String(req.query.userId || "").trim().toUpperCase();
+    const sheetParam = String(req.query.sheet || "").trim();
 
     const tasks = [];
+    let assignedCount = 0, pendingCount = 0, completedCount = 0;
+    const userSheets = new Set();
+    const STAGES = ["search", "supersede", "transcription"];
 
-    const sheetsSnap =
-      await db.collection("sds_sheets").get();
+    const sheetsSnap = await db.collection("sds_sheets").get();
 
     for (const sheetDoc of sheetsSnap.docs) {
       const sheet = sheetDoc.id;
+      const refsSnap = await sheetDoc.ref.collection("references").get();
 
-      const refsSnap = await sheetDoc.ref
-        .collection("references")
-        .get();
-
-      refsSnap.forEach((doc) => {
+      refsSnap.forEach(doc => {
         const d = doc.data();
+        let userInRef = false;
 
-        const search = d.search || {};
-        const supersede = d.supersede || {};
-        const transcription = d.transcription || {};
+        STAGES.forEach(stageName => {
+          const s = d[stageName] || {};
+          const isAssigned  = s.assignedTo?.toUpperCase()  === userId;
+          const isCompleted = s.completedBy?.toUpperCase() === userId;
 
-        if (
-          search.completedBy === userId ||
-          supersede.completedBy === userId ||
-          transcription.completedBy === userId
-        ) {
-          const completedAt =
-            transcription.completedAt || supersede.completedAt || search.completedAt || d.updatedAt || null;
-          tasks.push({
-            referenceId: doc.id,
-            company: "SARN",
-            sheet,
-            stage: d.currentStage || "search",
-            status: "completed",
-            completedAt,
-          });
-        }
+          if (!isAssigned && !isCompleted) return;
+          userInRef = true;
+
+          // Summary counts: sheet-filtered, no date filter
+          if (!sheetParam || sheet === sheetParam) {
+            if (isAssigned) {
+              assignedCount++;
+              if (s.status === "completed") completedCount++;
+              else pendingCount++;
+            }
+          }
+
+          // One table row per completed stage (sheet-filtered)
+          if (isCompleted) {
+            if (sheetParam && sheet !== sheetParam) return;
+            tasks.push({
+              referenceId: doc.id,
+              company: "SARN",
+              sheet,
+              stage: stageName,
+              status: "completed",
+              completedAt: s.completedAt || d.updatedAt || null,
+            });
+          }
+        });
+
+        if (userInRef) userSheets.add(sheet);
       });
     }
+
+    tasks.sort((a, b) => {
+      const ta = a.completedAt?._seconds ?? a.completedAt ?? 0;
+      const tb = b.completedAt?._seconds ?? b.completedAt ?? 0;
+      return tb - ta;
+    });
 
     return res.json({
       ok: true,
       tasks,
+      sheets: Array.from(userSheets).sort(),
+      summary: { assignedCount, pendingCount, completedCount },
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({
-      ok: false,
-    });
+    return res.status(500).json({ ok: false });
   }
 });
 
@@ -2403,8 +2652,10 @@ app.post("/sds/workflow/billing", async (req, res) => {
 app.post("/dq/upload", upload.single("file"), async (req, res) => {
   try {
     const rawSheet = req.body.sheet;
+    const dueDate = String(req.body.dueDate || "").trim();
     if (!rawSheet) return errJson(res, "Sheet required", 400);
     if (!req.file) return errJson(res, "File required", 400);
+    if (!dueDate) return errJson(res, "Due date is required", 400);
 
     const sheet = normalizeSheetName(rawSheet);
 
@@ -2470,7 +2721,7 @@ app.post("/dq/upload", upload.single("file"), async (req, res) => {
     await db
       .collection("dq_sheets")
       .doc(sheet)
-      .set({ createdAt: Date.now() }, { merge: true });
+      .set({ createdAt: Date.now(), dueDate }, { merge: true });
 
     return res.json({ ok: true, added });
   } catch (err) {
@@ -3114,9 +3365,13 @@ app.get("/user/dq-tasks", async (req, res) => {
 app.get("/user/completed-dq-tasks", async (req, res) => {
   try {
     const userId = String(req.query.userId || "").trim();
+    const sheetParam = String(req.query.sheet || "").trim();
     if (!userId) return res.json({ ok: false, error: "UserId required" });
 
     const tasks = [];
+    let assignedCount = 0, pendingCount = 0, completedCount = 0;
+    const userSheets = new Set();
+
     const sheetsSnap = await db.collection("dq_sheets").get();
 
     for (const sheetDoc of sheetsSnap.docs) {
@@ -3126,7 +3381,20 @@ app.get("/user/completed-dq-tasks", async (req, res) => {
       refsSnap.forEach(refDoc => {
         const d = refDoc.data();
         if (d.assignedTo !== userId) return;
-        if (!d.billingReady) return;
+
+        userSheets.add(sheetId);
+        const isCompleted = !!d.billingReady;
+
+        // Summary counts: sheet-filtered
+        if (!sheetParam || sheetId === sheetParam) {
+          assignedCount++;
+          if (isCompleted) completedCount++;
+          else pendingCount++;
+        }
+
+        // Table rows: completed only, sheet-filtered
+        if (!isCompleted) return;
+        if (sheetParam && sheetId !== sheetParam) return;
 
         tasks.push({
           sheet: sheetId,
@@ -3140,7 +3408,13 @@ app.get("/user/completed-dq-tasks", async (req, res) => {
     }
 
     tasks.sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-    return res.json({ ok: true, tasks, total: tasks.length });
+    return res.json({
+      ok: true,
+      tasks,
+      total: tasks.length,
+      sheets: Array.from(userSheets).sort(),
+      summary: { assignedCount, pendingCount, completedCount },
+    });
   } catch (err) {
     console.error("COMPLETED DQ TASKS ERROR:", err);
     return res.status(500).json({ ok: false, error: err.message });
@@ -3368,12 +3642,17 @@ function excelDateToJS(value) {
 app.post("/batch/upload", upload.single("file"), async (req, res) => {
   try {
     const sheet = normalize(req.body.sheet);
+    const dueDate = String(req.body.dueDate || "").trim();
 
     if (!sheet || !req.file) {
       return res.json({
         ok: false,
         error: "Sheet and file required",
       });
+    }
+
+    if (!dueDate) {
+      return res.json({ ok: false, error: "Due date is required" });
     }
 
     const workbook = XLSX.read(
@@ -3435,6 +3714,7 @@ Object.keys(repoMap).forEach(repo => {
       .set(
         {
           createdAt: Date.now(),
+          dueDate,
         },
         { merge: true }
       );
@@ -4249,159 +4529,93 @@ const sheetSet = new Set();
 
 app.get("/user/batch/completed", async (req, res) => {
   try {
-    const userId = String(
-  req.query.userId || ""
-)
-  .trim()
-  .toUpperCase();
-  
-
-const fromDate =
-  req.query.fromDate || "";
-
-const toDate =
-  req.query.toDate || "";
-
-const page =
-  Number(req.query.page) || 1;
-
-const pageSize =
-  Number(req.query.pageSize) || 100;
- 
-const language =
-  String(
-    req.query.language || ""
-  ).trim();
+    const userId = String(req.query.userId || "").trim().toUpperCase();
+    const fromDate = req.query.fromDate || "";
+    const toDate = req.query.toDate || "";
+    const page = Number(req.query.page) || 1;
+    const pageSize = Number(req.query.pageSize) || 100;
+    const sheetFilter = String(req.query.sheet || "").trim();
 
     const rows = [];
-    let pendingAssigned = 0;
+    let assignedCount = 0;
+    let pendingCount = 0;
+    let completedCount = 0;
+    const userSheets = new Set();
 
-    const today = new Date()
-      .toISOString()
-      .slice(0, 10);
-
+    const today = new Date().toISOString().slice(0, 10);
     let completedToday = 0;
     let completedMonth = 0;
 
-    const sheets = await db
-      .collection("batch_sheets")
-      .get();
+    const sheets = await db.collection("batch_sheets").get();
 
     for (const sheetDoc of sheets.docs) {
-      const records = await sheetDoc.ref
-      .collection("records")
-      .get();
+      const records = await sheetDoc.ref.collection("records").get();
 
       records.forEach(doc => {
-  const d = doc.data();
+        const d = doc.data();
+        if (d.verification?.assignedTo?.toUpperCase() !== userId) return;
 
-  if (
-  d.verification?.assignedTo
-    ?.toUpperCase() !==
-  userId
-) {
-  return;
-}
+        userSheets.add(sheetDoc.id);
+        const status = d.verification?.status?.toLowerCase() || "";
+        const isCompleted = status === "completed";
+        const verifiedDate = d.verification?.dateVerified || "";
 
-  const status =
-    d.verification?.status
-      ?.toLowerCase() || "";
+        // Summary counts: sheet-filtered, no date filter
+        if (!sheetFilter || sheetDoc.id === sheetFilter) {
+          assignedCount++;
+          if (!isCompleted) pendingCount++;
+          else completedCount++;
+        }
 
-  // Count pending
-  if (status !== "completed") {
-    pendingAssigned++;
-  }
+        // Table rows: sheet-filtered + date-filtered, completed only
+        if (!isCompleted) return;
+        if (sheetFilter && sheetDoc.id !== sheetFilter) return;
+        if (fromDate && verifiedDate < fromDate) return;
+        if (toDate && verifiedDate > toDate) return;
 
-  // Completed rows
-  if (status === "completed") {
-    const verifiedDate =
-      d.verification?.dateVerified || "";
-      if (
-  fromDate &&
-  verifiedDate < fromDate
-) {
-  return;
-}
+        rows.push({
+          sheet: sheetDoc.id,
+          recordId: doc.id,
+          newRepository: d.common?.newRepository || "",
+          chemicalName: d.common?.chemicalName,
+          manufacturerName: d.common?.manufacturerName,
+          language: d.common?.language || "",
+          siteName: d.common?.siteName,
+          verifiedDate,
+        });
 
-if (
-  toDate &&
-  verifiedDate > toDate
-) {
-  return;
-}
-
-    rows.push({
-      sheet: sheetDoc.id,
-      recordId: doc.id,
-
-      newRepository:
-        d.common?.newRepository || "",
-
-      chemicalName:
-        d.common?.chemicalName,
-
-      manufacturerName:
-        d.common?.manufacturerName,
-
-      language:
-        d.common?.language || "",
-
-      siteName:
-        d.common?.siteName,
-
-      verifiedDate,
-    });
-
-    if (
-      verifiedDate === today
-    ) {
-      completedToday++;
+        if (verifiedDate === today) completedToday++;
+        if (verifiedDate?.startsWith(today.slice(0, 7))) completedMonth++;
+      });
     }
 
-    if (
-      verifiedDate?.startsWith(
-        today.slice(0, 7)
-      )
-    ) {
-      completedMonth++;
-    }
-  }
-});
-    }
-const start =
-  (page - 1) * pageSize;
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize;
+    const paginatedRows = rows.slice(start, end);
 
-const end =
-  start + pageSize;
-
-const paginatedRows =
-  rows.slice(start, end);
     res.json({
-  ok: true,
-
-  rows: paginatedRows,
-
-  summary: {
-    completedToday,
-    completedMonth,
-    pendingAssigned,
-    totalCompleted:
-      rows.length,
-  },
-
-  pagination: {
-    page,
-    pageSize,
-    total: rows.length,
-    pages: Math.ceil(
-      rows.length / pageSize
-    ),
-  },
-});
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
+      ok: true,
+      rows: paginatedRows,
+      sheets: Array.from(userSheets).sort(),
+      summary: {
+        assignedCount,
+        pendingCount,
+        completedCount,
+        completedToday,
+        completedMonth,
+        // backward compat
+        pendingAssigned: pendingCount,
+        totalCompleted: completedCount,
+      },
+      pagination: {
+        page,
+        pageSize,
+        total: rows.length,
+        pages: Math.ceil(rows.length / pageSize),
+      },
     });
+  } catch (err) {
+    res.status(500).json({ ok: false });
   }
 });
 
@@ -5491,37 +5705,67 @@ function splitPdfSections(text) {
 
 app.post("/admin/pdf/translate-section", async (req, res) => {
   try {
-    const { text } = req.body;
-    if (!text) return res.status(400).json({ ok: false, error: "text required" });
+    const { lines } = req.body;
+    if (!lines || !Array.isArray(lines) || lines.length === 0)
+      return res.status(400).json({ ok: false, error: "lines array required" });
+
     const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+    // Collect non-blank lines with their original indices
+    const indexed = lines
+      .map((l, i) => ({ i, text: (l || "").trim() }))
+      .filter(x => x.text);
+
+    if (indexed.length === 0)
+      return res.json({ ok: true, translatedLines: lines, usage: null });
+
+    const numbered = indexed.map((x, n) => `${n + 1}. ${x.text}`).join("\n");
+
     const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         temperature: 0,
-        max_tokens: 1200,
+        max_tokens: 2400,
         messages: [
           {
             role: "system",
-            content: `You are a professional technical translator specializing in chemical Safety Data Sheets (SDS/MSDS) following GHS and OSHA standards.
+            content: `You are a professional technical translator for chemical Safety Data Sheets (SDS/MSDS) following GHS and OSHA standards.
+
+You will receive a numbered list of lines. Translate each line to English.
 
 Rules:
-- Translate everything to English accurately and completely
-- Preserve all numbers, percentages, CAS numbers, concentrations, and units exactly as written
-- Use correct IUPAC chemical names and standard SDS terminology
-- Keep the original structure: headings, bullet points, tables, line breaks
-- Do NOT summarize, skip, or paraphrase any content
-- Do NOT add any preamble, notes, or explanation — output the translated text only`,
+- Return EXACTLY ${indexed.length} numbered lines in the same order (1. 2. 3. …)
+- Do NOT add, remove, merge, or split any lines — one input line = one output line
+- Preserve all numbers, CAS numbers, percentages, units, and codes exactly as written
+- Use correct GHS/OSHA SDS terminology
+- Output ONLY the numbered translated lines — no preamble, notes, or explanation`,
           },
-          { role: "user", content: text },
+          { role: "user", content: numbered },
         ],
       }),
     });
+
     const data = await groqRes.json();
-    const translated = data.choices?.[0]?.message?.content?.trim() || "";
-    if (!translated) return res.json({ ok: false, error: "Translation returned empty." });
-    res.json({ ok: true, translated, usage: data.usage || null });
+    const raw = data.choices?.[0]?.message?.content?.trim() || "";
+    if (!raw) return res.json({ ok: false, error: "Translation returned empty." });
+
+    // Parse "N. text" lines from the response
+    const parsed = [];
+    for (const line of raw.split("\n")) {
+      const m = line.match(/^\d+\.\s*(.*)/);
+      if (m) parsed.push(m[1].trim());
+    }
+
+    // Reconstruct the full array restoring blank lines at original positions
+    const translatedLines = lines.map((l, i) => {
+      if (!(l || "").trim()) return "";
+      const idx = indexed.findIndex(x => x.i === i);
+      return idx >= 0 ? (parsed[idx] || l) : l;
+    });
+
+    res.json({ ok: true, translatedLines, usage: data.usage || null });
   } catch (err) {
     console.error("SECTION TRANSLATE ERROR:", err.message);
     res.status(500).json({ ok: false, error: err.message });
@@ -5691,22 +5935,125 @@ ${JSON.stringify(context, null, 2)}`;
 });
 
 // =====================================================================
+// SDS SCANNER — Full 14-field template extraction via Groq
+// =====================================================================
+app.post("/admin/sds/scan", chatUpload.single("pdf"), async (req, res) => {
+  try {
+    if (!process.env.GROQ_API_KEY) return res.json({ ok: false, error: "Groq API key not configured" });
+    if (!req.file) return res.json({ ok: false, error: "No PDF file received" });
+
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf");
+    const _path    = require("path");
+    const cMapUrl  = _path.join(_path.dirname(require.resolve("pdfjs-dist/package.json")), "cmaps") + _path.sep;
+
+    let rawText = "";
+    try {
+      const uint8 = new Uint8Array(req.file.buffer);
+      const doc   = await pdfjsLib.getDocument({ data: uint8, cMapUrl, cMapPacked: true, useSystemFonts: true }).promise;
+      for (let pg = 1; pg <= doc.numPages; pg++) {
+        const page    = await doc.getPage(pg);
+        const content = await page.getTextContent();
+        rawText += content.items.map(i => i.str).join(" ") + "\n";
+      }
+      rawText = rawText.replace(/\r\n/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
+    } catch {
+      return res.json({ ok: false, error: "Could not extract text from PDF." });
+    }
+
+    if (rawText.length < 200) {
+      return res.json({ ok: false, isScanned: true, error: "This appears to be a scanned (image-only) PDF. Insufficient text was extracted. A vision-capable model is required." });
+    }
+
+    const snippet = rawText.slice(0, 12000);
+
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.05,
+        max_tokens: 2000,
+        messages: [
+          {
+            role: "system",
+            content: "You are an expert SDS analyst. Extract ALL fields from the SDS text and return ONLY valid JSON with no markdown or explanation.",
+          },
+          {
+            role: "user",
+            content: `Extract these fields from this Safety Data Sheet and return as JSON:
+{
+  "manufacturer_name": null,
+  "city": null,
+  "state": null,
+  "zip": null,
+  "email": null,
+  "contact": null,
+  "emergency": null,
+  "ghs_pictograms": [],
+  "chemical_name": null,
+  "product_number": null,
+  "trade_names": [],
+  "composition": [{"name":"","cas":"","percentage":""}],
+  "voc_content": null,
+  "solid_content": null
+}
+
+Rules:
+- ghs_pictograms: list ALL pictogram names found in Section 2 and Section 14 (e.g. "Flame", "Corrosion", "Skull and Crossbones", "Exclamation Mark", "Health Hazard", "Exploding Bomb", "Oxidizer", "Compressed Gas", "Environmental Hazard")
+- composition: include ALL ingredients from Section 3 with CAS numbers and percentages
+- emergency: look for CHEMTREC, INFOTRAC, or emergency phone numbers
+- Use null for any field not found, empty array [] for empty lists
+
+SDS TEXT:
+${snippet}`,
+          },
+        ],
+      }),
+    });
+
+    const groqData = await groqRes.json();
+    const raw      = groqData.choices?.[0]?.message?.content?.trim() || "{}";
+    let fields = {};
+    try {
+      let jsonStr = raw.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim();
+      const s = jsonStr.indexOf("{"), e = jsonStr.lastIndexOf("}") + 1;
+      if (s >= 0) jsonStr = jsonStr.slice(s, e);
+      fields = JSON.parse(jsonStr);
+    } catch {
+      return res.json({ ok: false, error: "Could not parse extracted fields from Groq response." });
+    }
+
+    return res.json({ ok: true, fields, textChars: rawText.length, usage: groqData.usage || null });
+
+  } catch (err) {
+    return res.json({ ok: false, error: err.message });
+  }
+});
+
+// =====================================================================
 // MONITORING REPORTS — SDS
 // =====================================================================
 app.get("/admin/sds/reports-data", async (req, res) => {
   try {
-    const period = req.query.period || "week";
+    const period    = req.query.period   || "week";
+    const fromParam = req.query.fromDate || null;
+    const toParam   = req.query.toDate   || null;
     const now = new Date();
     let fromDate = null;
+    let toDate   = new Date(now); toDate.setHours(23, 59, 59, 999);
 
-    if (period === "today") {
-      fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "week") {
-      fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "month") {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    if (fromParam && toParam) {
+      fromDate = new Date(fromParam + "T00:00:00.000Z");
+      toDate   = new Date(toParam   + "T23:59:59.999Z");
+    } else {
+      if (period === "today") {
+        fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "week") {
+        fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "month") {
+        fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      }
     }
-    const toDate = new Date(now); toDate.setHours(23, 59, 59, 999);
 
     const usersSnap = await db.collection("users").get();
     const userMap = {};
@@ -5798,18 +6145,25 @@ app.get("/admin/sds/reports-data", async (req, res) => {
 // =====================================================================
 app.get("/admin/dq/reports-data", async (req, res) => {
   try {
-    const period = req.query.period || "week";
+    const period    = req.query.period   || "week";
+    const fromParam = req.query.fromDate || null;
+    const toParam   = req.query.toDate   || null;
     const now = new Date();
     let fromDate = null;
+    let toDate   = new Date(now); toDate.setHours(23, 59, 59, 999);
 
-    if (period === "today") {
-      fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "week") {
-      fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "month") {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    if (fromParam && toParam) {
+      fromDate = new Date(fromParam + "T00:00:00.000Z");
+      toDate   = new Date(toParam   + "T23:59:59.999Z");
+    } else {
+      if (period === "today") {
+        fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "week") {
+        fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "month") {
+        fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      }
     }
-    const toDate = new Date(now); toDate.setHours(23, 59, 59, 999);
 
     const usersSnap = await db.collection("users").get();
     const userMap = {};
@@ -5884,18 +6238,25 @@ app.get("/admin/dq/reports-data", async (req, res) => {
 // =====================================================================
 app.get("/admin/batch/reports-data", async (req, res) => {
   try {
-    const period = req.query.period || "week";
+    const period    = req.query.period   || "week";
+    const fromParam = req.query.fromDate || null;
+    const toParam   = req.query.toDate   || null;
     const now = new Date();
     let fromDate = null;
+    let toDate   = new Date(now); toDate.setHours(23, 59, 59, 999);
 
-    if (period === "today") {
-      fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "week") {
-      fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
-    } else if (period === "month") {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    if (fromParam && toParam) {
+      fromDate = new Date(fromParam + "T00:00:00.000Z");
+      toDate   = new Date(toParam   + "T23:59:59.999Z");
+    } else {
+      if (period === "today") {
+        fromDate = new Date(now); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "week") {
+        fromDate = new Date(now); fromDate.setDate(fromDate.getDate() - 6); fromDate.setHours(0, 0, 0, 0);
+      } else if (period === "month") {
+        fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      }
     }
-    const toDate = new Date(now); toDate.setHours(23, 59, 59, 999);
 
     const usersSnap = await db.collection("users").get();
     const userMap = {};
@@ -5966,6 +6327,764 @@ app.get("/admin/batch/reports-data", async (req, res) => {
     console.error("BATCH REPORTS ERROR:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ── Sheet due dates (used by user-facing pages) ───────────────────
+app.get("/sheets/due-dates", async (req, res) => {
+  try {
+    const [sdsSnap, dqSnap, batchSnap] = await Promise.all([
+      db.collection("sds_sheets").get(),
+      db.collection("dq_sheets").get(),
+      db.collection("batch_sheets").get(),
+    ]);
+    const sds = {}, dq = {}, batch = {};
+    sdsSnap.docs.forEach(d   => { const dd = d.data().dueDate; if (dd) sds[d.id]   = dd; });
+    dqSnap.docs.forEach(d    => { const dd = d.data().dueDate; if (dd) dq[d.id]    = dd; });
+    batchSnap.docs.forEach(d => { const dd = d.data().dueDate; if (dd) batch[d.id] = dd; });
+    res.json({ ok: true, sds, dq, batch });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+// ── Deadline alerts (admin chatbot notifications) ─────────────────
+app.get("/admin/deadline-alerts", async (req, res) => {
+  try {
+    function calcDaysLeft(dateStr) {
+      if (!dateStr) return null;
+      const due    = new Date(dateStr + "T00:00:00Z");
+      const nowUTC = new Date();
+      nowUTC.setUTCHours(0, 0, 0, 0);
+      return Math.ceil((due - nowUTC) / 86400000);
+    }
+    function getUrgency(days) {
+      if (days === null) return null;
+      if (days < 0)  return "overdue";
+      if (days <= 2) return "critical";
+      if (days <= 7) return "warning";
+      return "ok";
+    }
+    function buildUserStats(userMap) {
+      const all = Object.entries(userMap).map(([userId, s]) => ({
+        userId,
+        assigned: s.assigned,
+        completed: s.completed,
+        pending: s.assigned - s.completed,
+        completionRate: s.assigned > 0 ? Math.round((s.completed / s.assigned) * 100) : 0,
+      }));
+      if (!all.length) return { all: [], avgRate: 0 };
+      const avgRate = Math.round(all.reduce((sum, u) => sum + u.completionRate, 0) / all.length);
+      all.forEach(u => { u.vsAvg = u.completionRate >= avgRate ? "above" : "below"; });
+      return { all, avgRate };
+    }
+
+    const alerts = [];
+
+    // ── SDS ──
+    const sdsSheets = await db.collection("sds_sheets").get();
+    for (const sheetDoc of sdsSheets.docs) {
+      const { dueDate } = sheetDoc.data();
+      if (!dueDate) continue;
+      const days = calcDaysLeft(dueDate);
+      const urg  = getUrgency(days);
+      if (!urg || urg === "ok") continue;
+
+      const refs = await sheetDoc.ref.collection("references").get();
+      const userMap = {};
+      refs.forEach(ref => {
+        const d = ref.data();
+        const uid = d.assignedTo;
+        if (!uid) return;
+        if (!userMap[uid]) userMap[uid] = { assigned: 0, completed: 0 };
+        userMap[uid].assigned++;
+        if (d.currentStage === "completed") userMap[uid].completed++;
+      });
+      const { all, avgRate } = buildUserStats(userMap);
+      const users = all.filter(u => u.pending > 0);
+      if (!users.length) continue;
+      alerts.push({ module: "SDS", sheet: sheetDoc.id, dueDate, daysLeft: days, urgency: urg, avgCompletionRate: avgRate, users });
+    }
+
+    // ── DQ ──
+    const dqSheets = await db.collection("dq_sheets").get();
+    for (const sheetDoc of dqSheets.docs) {
+      const { dueDate } = sheetDoc.data();
+      if (!dueDate) continue;
+      const days = calcDaysLeft(dueDate);
+      const urg  = getUrgency(days);
+      if (!urg || urg === "ok") continue;
+
+      const refs = await sheetDoc.ref.collection("references").get();
+      const userMap = {};
+      refs.forEach(ref => {
+        const d = ref.data();
+        const uid = d.assignedTo;
+        if (!uid) return;
+        if (!userMap[uid]) userMap[uid] = { assigned: 0, completed: 0 };
+        userMap[uid].assigned++;
+        if (d.billingReady === true) userMap[uid].completed++;
+      });
+      const { all, avgRate } = buildUserStats(userMap);
+      const users = all.filter(u => u.pending > 0);
+      if (!users.length) continue;
+      alerts.push({ module: "DQ", sheet: sheetDoc.id, dueDate, daysLeft: days, urgency: urg, avgCompletionRate: avgRate, users });
+    }
+
+    // ── BATCH ──
+    const batchSheets = await db.collection("batch_sheets").get();
+    for (const sheetDoc of batchSheets.docs) {
+      const { dueDate } = sheetDoc.data();
+      if (!dueDate) continue;
+      const days = calcDaysLeft(dueDate);
+      const urg  = getUrgency(days);
+      if (!urg || urg === "ok") continue;
+
+      const records = await sheetDoc.ref.collection("records").get();
+      const userMap = {};
+      records.forEach(rec => {
+        const d   = rec.data();
+        const uid = d.verification?.assignedTo || d.assignedTo;
+        if (!uid) return;
+        if (!userMap[uid]) userMap[uid] = { assigned: 0, completed: 0 };
+        userMap[uid].assigned++;
+        if (d.workflowStatus === "BILLING_READY" || d.verification?.status === "completed") userMap[uid].completed++;
+      });
+      const { all, avgRate } = buildUserStats(userMap);
+      const users = all.filter(u => u.pending > 0);
+      if (!users.length) continue;
+      alerts.push({ module: "BATCH", sheet: sheetDoc.id, dueDate, daysLeft: days, urgency: urg, avgCompletionRate: avgRate, users });
+    }
+
+    // Most urgent first
+    const urgOrder = { overdue: 0, critical: 1, warning: 2 };
+    alerts.sort((a, b) => (urgOrder[a.urgency] ?? 3) - (urgOrder[b.urgency] ?? 3));
+    res.json({ ok: true, alerts });
+  } catch (err) {
+    console.error("DEADLINE ALERTS ERROR:", err);
+    res.json({ ok: false, error: err.message });
+  }
+});
+
+// ============================================================================
+//  NOTIFICATION SETTINGS & AUTOMATED EMAIL
+// ============================================================================
+const nodemailer = require("nodemailer");
+
+// GET /admin/notification-settings
+app.get("/admin/notification-settings", async (req, res) => {
+  try {
+    const doc = await db.collection("notification_settings").doc("config").get();
+    if (!doc.exists) {
+      return res.json({ ok: true, settings: {
+        senderEmail: "", recipientEmails: [], thresholds: [75],
+        enabled: false, notifiedMap: {}, hasPassword: false,
+      }});
+    }
+    const d = doc.data();
+    res.json({ ok: true, settings: {
+      senderEmail: d.senderEmail || "",
+      recipientEmails: d.recipientEmails || [],
+      thresholds: d.thresholds || [75],
+      enabled: d.enabled || false,
+      authMethod: d.authMethod || "oauth2",
+      notifiedMap: d.notifiedMap || {},
+      hasPassword: !!(d.senderPassword),
+      hasOAuth: !!(d.oauthClientId && d.oauthClientSecret && d.oauthRefreshToken),
+      lastChecked: d.lastChecked || null,
+      lastSent: d.lastSent || null,
+    }});
+  } catch (err) { errJson(res, err.message); }
+});
+
+// POST /admin/notification-settings
+app.post("/admin/notification-settings", async (req, res) => {
+  try {
+    const { senderEmail, senderPassword, recipientEmails, thresholds, enabled, authMethod,
+            oauthClientId, oauthClientSecret, oauthRefreshToken } = req.body;
+    const ref = db.collection("notification_settings").doc("config");
+    const existing = await ref.get();
+    const prev = existing.exists ? existing.data() : {};
+
+    const update = {
+      senderEmail: senderEmail || "",
+      recipientEmails: recipientEmails || [],
+      thresholds: (thresholds || [75]).map(Number).filter(n => n > 0 && n <= 100).sort((a, b) => a - b),
+      enabled: !!enabled,
+      authMethod: authMethod || "oauth2",
+      updatedAt: Date.now(),
+      notifiedMap: prev.notifiedMap || {},
+      // Keep existing secrets if new ones not provided
+      senderPassword:      senderPassword      || prev.senderPassword      || "",
+      oauthClientId:       oauthClientId       || prev.oauthClientId       || "",
+      oauthClientSecret:   oauthClientSecret   || prev.oauthClientSecret   || "",
+      oauthRefreshToken:   oauthRefreshToken   || prev.oauthRefreshToken   || "",
+    };
+    await ref.set(update);
+    res.json({ ok: true });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// POST /admin/reset-notification-map
+app.post("/admin/reset-notification-map", async (req, res) => {
+  try {
+    await db.collection("notification_settings").doc("config").update({ notifiedMap: {} });
+    res.json({ ok: true });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// Helper: aggregate all sheet progress
+async function aggregateSheetProgress() {
+  const result = { sds: {}, dq: {}, batch: {} };
+
+  // SDS
+  const sdsSnap = await db.collection("sds_sheets").get();
+  const SDS_STAGES = ["search", "supersede", "transcription", "billing"];
+  for (const sheetDoc of sdsSnap.docs) {
+    const sheetId = sheetDoc.id;
+    const recsSnap = await db.collection("sds_sheets").doc(sheetId).collection("references").get();
+    const users = {};
+    let assigned = 0, completed = 0;
+    for (const recDoc of recsSnap.docs) {
+      const d = recDoc.data();
+      for (const stage of SDS_STAGES) {
+        const sd = d[stage];
+        if (!sd || !sd.assignedTo) continue;
+        const uid = sd.assignedTo;
+        if (!users[uid]) users[uid] = { assigned: 0, completed: 0 };
+        users[uid].assigned++; assigned++;
+        if (sd.completedAt) { users[uid].completed++; completed++; }
+      }
+    }
+    result.sds[sheetId] = { sheetId, assigned, completed, users };
+  }
+
+  // DQ
+  const dqSnap = await db.collection("dq_sheets").get();
+  for (const sheetDoc of dqSnap.docs) {
+    const sheetId = sheetDoc.id;
+    const recsSnap = await db.collection("dq_sheets").doc(sheetId).collection("references").get();
+    const users = {};
+    let assigned = 0, completed = 0;
+    for (const recDoc of recsSnap.docs) {
+      const d = recDoc.data();
+      const uid = d.assignedTo;
+      if (!uid) continue;
+      if (!users[uid]) users[uid] = { assigned: 0, completed: 0 };
+      users[uid].assigned++; assigned++;
+      if (d.billingReady === true) { users[uid].completed++; completed++; }
+    }
+    result.dq[sheetId] = { sheetId, assigned, completed, users };
+  }
+
+  // Batch
+  const batchSnap = await db.collection("batch_sheets").get();
+  for (const sheetDoc of batchSnap.docs) {
+    const sheetId = sheetDoc.id;
+    const recsSnap = await db.collection("batch_sheets").doc(sheetId).collection("records").get();
+    const users = {};
+    let assigned = 0, completed = 0;
+    for (const recDoc of recsSnap.docs) {
+      const d = recDoc.data();
+      const uid = d.verification?.assignedTo;
+      if (!uid) continue;
+      if (!users[uid]) users[uid] = { assigned: 0, completed: 0 };
+      users[uid].assigned++; assigned++;
+      if (d.verification?.status === "Completed") { users[uid].completed++; completed++; }
+    }
+    result.batch[sheetId] = { sheetId, assigned, completed, users };
+  }
+
+  return result;
+}
+
+// Helper: build HTML email
+function buildProgressEmailHtml(items, userMap) {
+  const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
+  const cards = items.map(n => {
+    const pct = n.assigned ? Math.round((n.completed / n.assigned) * 100) : 0;
+    const pending = Math.max(0, n.assigned - n.completed);
+    const barColor = pct >= 80 ? "#16a34a" : pct >= 50 ? "#f59e0b" : "#dc2626";
+    const pctColor = pct >= 80 ? "#16a34a" : pct >= 50 ? "#d97706" : "#dc2626";
+
+    // Progress bar: filled cell + empty cell side by side in a table
+    const filledPct = Math.max(1, pct);
+    const emptyPct  = 100 - filledPct;
+    const barRow = pct === 100
+      ? `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0;"><tr>
+           <td width="100%" height="10" bgcolor="${barColor}" style="border-radius:5px;font-size:0;line-height:0;">&nbsp;</td>
+         </tr></table>`
+      : `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0;background:#e2e8f0;border-radius:5px;overflow:hidden;"><tr>
+           <td width="${filledPct}%" height="10" bgcolor="${barColor}" style="font-size:0;line-height:0;">&nbsp;</td>
+           <td width="${emptyPct}%" height="10" style="font-size:0;line-height:0;">&nbsp;</td>
+         </tr></table>`;
+
+    const thresholdTag = n.threshold
+      ? `&nbsp;<span style="background:#3b82f6;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">${n.threshold}% threshold</span>`
+      : "";
+
+    // Per-user rows
+    const userRows = Object.entries(n.users || {}).map(([uid, u], idx) => {
+      const up  = u.assigned ? Math.round((u.completed / u.assigned) * 100) : 0;
+      const upd = Math.max(0, u.assigned - u.completed);
+      const uc  = up >= 80 ? "#16a34a" : up >= 50 ? "#d97706" : "#dc2626";
+      const bg  = idx % 2 === 0 ? "#ffffff" : "#f8fafc";
+      return `<tr bgcolor="${bg}">
+        <td style="padding:7px 10px;font-size:13px;border-bottom:1px solid #e2e8f0;">${userMap[uid] || uid}</td>
+        <td style="padding:7px 10px;font-size:13px;text-align:center;border-bottom:1px solid #e2e8f0;">${u.assigned}</td>
+        <td style="padding:7px 10px;font-size:13px;text-align:center;color:#16a34a;font-weight:700;border-bottom:1px solid #e2e8f0;">${u.completed}</td>
+        <td style="padding:7px 10px;font-size:13px;text-align:center;color:#dc2626;font-weight:700;border-bottom:1px solid #e2e8f0;">${upd}</td>
+        <td style="padding:7px 10px;font-size:13px;text-align:center;font-weight:700;color:${uc};border-bottom:1px solid #e2e8f0;">${up}%</td>
+      </tr>`;
+    }).join("");
+
+    return `
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:16px;border-collapse:collapse;">
+      <tr>
+        <td style="padding:14px 16px 0 16px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;">
+              ${n.workflow}${thresholdTag}
+            </td>
+            <td align="right" style="font-size:22px;font-weight:800;color:${pctColor};">${pct}%</td>
+          </tr></table>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-top:2px;">${n.sheetId.replace(/_/g, " ")}</div>
+          ${barRow}
+          <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px;"><tr>
+            <td style="font-size:12px;color:#64748b;padding-right:16px;">${n.assigned} total</td>
+            <td style="font-size:12px;color:#16a34a;font-weight:600;padding-right:16px;">&#10003; ${n.completed} done</td>
+            <td style="font-size:12px;color:#dc2626;font-weight:600;">&#8987; ${pending} pending</td>
+          </tr></table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 16px 14px 16px;">
+          <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Per-User Breakdown</div>
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+            <tr bgcolor="#f1f5f9">
+              <th style="padding:6px 10px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">User</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Assigned</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Completed</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Pending</th>
+              <th style="padding:6px 10px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">% Done</th>
+            </tr>
+            ${userRows}
+          </table>
+        </td>
+      </tr>
+    </table>`;
+  }).join("");
+
+  const uniqueSheets = [...new Set(items.map(n => n.sheetId.replace(/_/g, " ")))].join(", ");
+  const thresholdList = [...new Set(items.filter(n => n.threshold).map(n => `${n.threshold}%`))].join(", ");
+  const subTitle = thresholdList
+    ? `Threshold crossed: ${thresholdList} &mdash; ${uniqueSheets}`
+    : `Full progress report &mdash; ${new Date().toLocaleDateString("en-IN")}`;
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f5f9"><tr><td align="center" style="padding:20px 10px;">
+
+  <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;border-collapse:collapse;">
+
+    <!-- HEADER -->
+    <tr>
+      <td bgcolor="#0f172a" style="padding:20px 24px;border-radius:10px 10px 0 0;">
+        <div style="color:#94a3b8;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">SARN Technologies</div>
+        <div style="color:#ffffff;font-size:19px;font-weight:700;margin-bottom:4px;">Progress Report Alert</div>
+        <div style="color:#94a3b8;font-size:12px;">${subTitle}</div>
+      </td>
+    </tr>
+
+    <!-- BODY -->
+    <tr>
+      <td bgcolor="#ffffff" style="padding:20px 24px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+        <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">Business Completion Progress</div>
+        ${cards}
+      </td>
+    </tr>
+
+    <!-- FOOTER -->
+    <tr>
+      <td bgcolor="#f8fafc" style="padding:12px 24px;text-align:center;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;">
+        <div style="color:#94a3b8;font-size:11px;">This is an auto-generated report by <strong style="color:#64748b;">SARN Technologies</strong>. Please do not reply to this email.</div>
+        <div style="color:#cbd5e1;font-size:10px;margin-top:4px;">${now} IST</div>
+      </td>
+    </tr>
+
+  </table>
+</td></tr></table>
+</body></html>`;
+}
+
+// POST /admin/trigger-notifications
+app.post("/admin/trigger-notifications", async (req, res) => {
+  try {
+    const { forceAll } = req.body;
+
+    const configDoc = await db.collection("notification_settings").doc("config").get();
+    if (!configDoc.exists) return res.json({ ok: true, sent: false, reason: "No settings configured" });
+
+    const cfg = configDoc.data();
+    if (!cfg.enabled && !forceAll) return res.json({ ok: true, sent: false, reason: "Notifications disabled" });
+    if (!cfg.senderEmail) return res.json({ ok: false, error: "Sender email not configured" });
+    const useOAuth = cfg.authMethod === "oauth2" && cfg.oauthClientId && cfg.oauthClientSecret && cfg.oauthRefreshToken;
+    if (!useOAuth && !cfg.senderPassword) return res.json({ ok: false, error: "Auth credentials not configured. Set up Gmail API (OAuth2) or an App Password." });
+    if (!cfg.recipientEmails?.length) return res.json({ ok: false, error: "No recipient emails configured" });
+
+    const thresholds = (cfg.thresholds || [75]).map(Number).sort((a, b) => a - b);
+    const notifiedMap = cfg.notifiedMap || {};
+
+    const progress = await aggregateSheetProgress();
+
+    const usersSnap = await db.collection("users").get();
+    const userMap = {};
+    usersSnap.docs.forEach(d => { userMap[d.id] = d.data().name || d.data().email || d.id; });
+
+    const toNotify = [];
+    const newEntries = {};
+
+    if (forceAll) {
+      // Send all sheets regardless of thresholds
+      for (const [workflow, sheets] of Object.entries(progress)) {
+        for (const [sheetId, data] of Object.entries(sheets)) {
+          if (!data.assigned) continue;
+          toNotify.push({ workflow: workflow.toUpperCase(), sheetId, ...data, threshold: null });
+        }
+      }
+    } else {
+      // Only notify for newly crossed thresholds
+      for (const [workflow, sheets] of Object.entries(progress)) {
+        for (const [sheetId, data] of Object.entries(sheets)) {
+          if (!data.assigned) continue;
+          const pct = Math.round((data.completed / data.assigned) * 100);
+          for (const threshold of thresholds) {
+            const key = `${workflow}__${sheetId}__${threshold}`;
+            if (pct >= threshold && !notifiedMap[key]) {
+              toNotify.push({ workflow: workflow.toUpperCase(), sheetId, ...data, pct, threshold });
+              newEntries[key] = true;
+            }
+          }
+        }
+      }
+    }
+
+    if (!toNotify.length) {
+      await db.collection("notification_settings").doc("config").update({ lastChecked: Date.now() });
+      return res.json({ ok: true, sent: false, reason: "No new thresholds crossed" });
+    }
+
+    const html = buildProgressEmailHtml(toNotify, userMap);
+    const uniqueSheets = [...new Set(toNotify.map(n => n.sheetId.replace(/_/g, " ")))].join(", ");
+    const subject = forceAll
+      ? `SARN Progress Report — ${new Date().toLocaleDateString("en-IN")}`
+      : `SARN Alert: Progress threshold crossed — ${uniqueSheets}`;
+
+    const transportAuth = useOAuth
+      ? {
+          type: "OAuth2",
+          user: cfg.senderEmail,
+          clientId: cfg.oauthClientId,
+          clientSecret: cfg.oauthClientSecret,
+          refreshToken: cfg.oauthRefreshToken,
+        }
+      : { user: cfg.senderEmail, pass: cfg.senderPassword };
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: transportAuth,
+    });
+
+    await transporter.sendMail({
+      from: `"SARN Technologies" <${cfg.senderEmail}>`,
+      to: cfg.recipientEmails.join(", "),
+      subject,
+      html,
+    });
+
+    await db.collection("notification_settings").doc("config").update({
+      notifiedMap: { ...notifiedMap, ...newEntries },
+      lastChecked: Date.now(),
+      lastSent: Date.now(),
+    });
+
+    res.json({ ok: true, sent: true, count: toNotify.length, recipients: cfg.recipientEmails.length });
+  } catch (err) {
+    console.error("TRIGGER NOTIFICATIONS ERROR:", err);
+    errJson(res, err.message);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEETING INVITE EMAIL HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildMeetingInviteHtml({ title, description, scheduledAtDisplay, durationMinutes, participants, createdByName, joinUrl }) {
+  const names = participants.map(p => p.userName).join(", ");
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f1f5f9"><tr><td align="center" style="padding:20px 10px;">
+  <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;border-collapse:collapse;">
+    <tr>
+      <td bgcolor="#0f172a" style="padding:20px 24px;border-radius:10px 10px 0 0;">
+        <div style="color:#94a3b8;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:6px;">SARN Technologies</div>
+        <div style="color:#ffffff;font-size:19px;font-weight:700;margin-bottom:4px;">Meeting Invitation</div>
+        <div style="color:#94a3b8;font-size:12px;">You have been invited to a scheduled meeting</div>
+      </td>
+    </tr>
+    <tr>
+      <td bgcolor="#ffffff" style="padding:24px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:20px;">
+          <tr bgcolor="#f8fafc">
+            <td style="padding:18px;">
+              <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:14px;">${title}</div>
+              ${description ? `<div style="font-size:13px;color:#64748b;margin-bottom:14px;">${description}</div>` : ""}
+              <table cellpadding="0" cellspacing="0" border="0">
+                <tr><td style="padding:4px 16px 4px 0;font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">When</td>
+                    <td style="padding:4px 0;font-size:13px;color:#0f172a;font-weight:600;">${scheduledAtDisplay} IST</td></tr>
+                <tr><td style="padding:4px 16px 4px 0;font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Duration</td>
+                    <td style="padding:4px 0;font-size:13px;color:#0f172a;">${durationMinutes} minutes</td></tr>
+                <tr><td style="padding:4px 16px 4px 0;font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Organizer</td>
+                    <td style="padding:4px 0;font-size:13px;color:#0f172a;">${createdByName}</td></tr>
+                <tr><td style="padding:4px 16px 4px 0;font-size:11px;color:#94a3b8;font-weight:700;text-transform:uppercase;">Attendees</td>
+                    <td style="padding:4px 0;font-size:13px;color:#0f172a;">${names}</td></tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+          <td align="center" style="padding-bottom:16px;">
+            <a href="${joinUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;padding:14px 36px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;">Join Meeting</a>
+          </td>
+        </tr></table>
+        <div style="padding:12px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;">
+          <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Or copy this link:</div>
+          <div style="font-size:12px;color:#2563eb;word-break:break-all;">${joinUrl}</div>
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td bgcolor="#f8fafc" style="padding:12px 24px;text-align:center;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;">
+        <div style="color:#94a3b8;font-size:11px;">Auto-generated by <strong style="color:#64748b;">SARN Technologies</strong>. Do not reply to this email.</div>
+      </td>
+    </tr>
+  </table>
+</td></tr></table>
+</body></html>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USER STATUS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALID_STATUSES = ["available", "away", "busy", "dnd", "in-call", "presenting", "offline"];
+
+// POST /user/status  { userId, status }
+app.post("/user/status", async (req, res) => {
+  try {
+    const { userId, status } = req.body;
+    if (!userId || !status) return res.json({ ok: false, error: "Missing fields" });
+    if (!VALID_STATUSES.includes(status)) return res.json({ ok: false, error: "Invalid status" });
+    await db.collection("users").doc(userId).update({ status, statusAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// GET /users/statuses  → { userId: { status, name } }
+app.get("/users/statuses", async (req, res) => {
+  try {
+    const snap = await db.collection("users").get();
+    const statuses = {};
+    snap.docs.forEach(d => {
+      const data = d.data();
+      statuses[d.id] = { status: data.status || "available", name: data.name || d.id };
+    });
+    res.json({ ok: true, statuses });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CALL ROOMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /calls/create  { userId, userName }  → { roomId, meetLink }
+app.post("/calls/create", async (req, res) => {
+  try {
+    const { userId, userName } = req.body;
+    if (!userId) return res.json({ ok: false, error: "Missing userId" });
+    const roomId = `sarn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let meetLink = "";
+    try { meetLink = await createGoogleMeetLink(`SARN Group Call — ${userName || userId}`) || ""; }
+    catch (e) { console.warn("GMeet link creation failed:", e.message); }
+    await db.collection("call_rooms").doc(roomId).set({
+      roomId, meetLink,
+      createdBy: userId, createdByName: userName || userId,
+      createdAt: new Date().toISOString(), active: true,
+      participants: [{ userId, userName: userName || userId, joinedAt: new Date().toISOString() }],
+    });
+    await db.collection("users").doc(userId).update({ status: "in-call", statusAt: new Date().toISOString() });
+    res.json({ ok: true, roomId, meetLink });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// GET /calls/active
+app.get("/calls/active", async (req, res) => {
+  try {
+    const snap = await db.collection("call_rooms").where("active", "==", true).get();
+    res.json({ ok: true, rooms: snap.docs.map(d => d.data()) });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// POST /calls/join  { roomId, userId, userName }
+app.post("/calls/join", async (req, res) => {
+  try {
+    const { roomId, userId, userName } = req.body;
+    const ref = db.collection("call_rooms").doc(roomId);
+    const doc = await ref.get();
+    if (!doc.exists || !doc.data().active) return res.json({ ok: false, error: "Room not active" });
+    const participants = doc.data().participants || [];
+    if (!participants.find(p => p.userId === userId)) {
+      participants.push({ userId, userName: userName || userId, joinedAt: new Date().toISOString() });
+      await ref.update({ participants });
+    }
+    await db.collection("users").doc(userId).update({ status: "in-call", statusAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// POST /calls/leave  { roomId, userId }
+app.post("/calls/leave", async (req, res) => {
+  try {
+    const { roomId, userId } = req.body;
+    const ref = db.collection("call_rooms").doc(roomId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.json({ ok: false, error: "Room not found" });
+    const participants = (doc.data().participants || []).filter(p => p.userId !== userId);
+    await ref.update({ participants, active: participants.length > 0 });
+    await db.collection("users").doc(userId).update({ status: "available", statusAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// POST /calls/direct  { callerId, callerName, calleeId }
+app.post("/calls/direct", async (req, res) => {
+  try {
+    const { callerId, callerName, calleeId } = req.body;
+    if (!callerId || !calleeId) return res.json({ ok: false, error: "Missing fields" });
+    const roomId = `direct-${callerId}-${calleeId}-${Date.now()}`;
+    let meetLink = "";
+    try { meetLink = await createGoogleMeetLink(`SARN Call — ${callerName || callerId}`) || ""; }
+    catch (e) { console.warn("GMeet link creation failed:", e.message); }
+    await db.collection("call_rooms").doc(roomId).set({
+      roomId, meetLink: meetLink || "", callType: "direct",
+      createdBy: callerId, createdByName: callerName || callerId,
+      calledUserId: calleeId,
+      createdAt: new Date().toISOString(), active: true,
+      participants: [{ userId: callerId, userName: callerName || callerId, joinedAt: new Date().toISOString() }],
+    });
+    await db.collection("users").doc(callerId).update({ status: "in-call", statusAt: new Date().toISOString() });
+    res.json({ ok: true, roomId, meetLink });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// GET /calls/users  — full user directory with live status
+app.get("/calls/users", async (req, res) => {
+  try {
+    const snap = await db.collection("users").get();
+    const users = snap.docs.map(d => {
+      const data = d.data();
+      return { userId: d.id, name: data.name || d.id, email: data.email || "", role: data.role || "user", status: data.status || "available" };
+    });
+    res.json({ ok: true, users });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// GET /calls/room/:roomId  — fetch room details including meetLink
+app.get("/calls/room/:roomId", async (req, res) => {
+  try {
+    const doc = await db.collection("call_rooms").doc(req.params.roomId).get();
+    if (!doc.exists) return res.json({ ok: false, error: "Room not found" });
+    res.json({ ok: true, room: doc.data() });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEETINGS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /meetings/schedule
+app.post("/meetings/schedule", async (req, res) => {
+  try {
+    const { title, description, scheduledAt, durationMinutes, createdBy, createdByName, participantIds } = req.body;
+    if (!title || !scheduledAt || !createdBy) return res.json({ ok: false, error: "Title, time, and creator are required" });
+
+    const meetingId = `meet-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const allIds = [...new Set([createdBy, ...(participantIds || [])])];
+
+    const participants = [];
+    for (const uid of allIds) {
+      const doc = await db.collection("users").doc(uid).get();
+      if (doc.exists) {
+        const data = doc.data();
+        participants.push({ userId: uid, userName: data.name || uid, email: data.email || "" });
+      }
+    }
+
+    // Create Google Meet link at the scheduled time
+    const schedStart = new Date(scheduledAt);
+    const schedEnd   = new Date(schedStart.getTime() + (durationMinutes || 60) * 60000);
+    let meetLink = "";
+    try { meetLink = await createGoogleMeetLink(title, schedStart.toISOString(), schedEnd.toISOString(), description || "") || ""; }
+    catch (e) { console.warn("GMeet link creation failed:", e.message); }
+
+    const meeting = {
+      meetingId, meetLink: meetLink || "", title, description: description || "",
+      scheduledAt, durationMinutes: durationMinutes || 60,
+      createdBy, createdByName: createdByName || createdBy,
+      participants, participantIds: allIds,
+      status: "upcoming", createdAt: new Date().toISOString(),
+    };
+    await db.collection("meetings").doc(meetingId).set(meeting);
+
+    let emailsSent = 0;
+    try {
+      const configDoc = await db.collection("notification_settings").doc("config").get();
+      if (configDoc.exists) {
+        const cfg = configDoc.data();
+        const useOAuth = cfg.authMethod === "oauth2" && cfg.oauthClientId && cfg.oauthClientSecret && cfg.oauthRefreshToken;
+        if ((useOAuth || cfg.senderPassword) && cfg.senderEmail) {
+          const transportAuth = useOAuth
+            ? { type: "OAuth2", user: cfg.senderEmail, clientId: cfg.oauthClientId, clientSecret: cfg.oauthClientSecret, refreshToken: cfg.oauthRefreshToken }
+            : { user: cfg.senderEmail, pass: cfg.senderPassword };
+          const transporter = nodemailer.createTransport({ service: "gmail", auth: transportAuth });
+          const scheduledAtDisplay = new Date(scheduledAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+          const joinUrl = meetLink || "";
+          const html = buildMeetingInviteHtml({ title, description, scheduledAtDisplay, durationMinutes: durationMinutes || 60, participants, createdByName: createdByName || createdBy, joinUrl });
+          const toEmails = participants.filter(p => p.userId !== createdBy && p.email).map(p => p.email);
+          if (toEmails.length) {
+            await transporter.sendMail({ from: `"SARN Technologies" <${cfg.senderEmail}>`, to: toEmails.join(", "), subject: `Meeting Invite: ${title}`, html });
+            emailsSent = toEmails.length;
+          }
+        }
+      }
+    } catch (emailErr) { console.warn("Meeting invite email failed:", emailErr.message); }
+
+    res.json({ ok: true, meetingId, emailsSent });
+  } catch (err) { errJson(res, err.message); }
+});
+
+// GET /meetings/mine?userId=
+app.get("/meetings/mine", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.json({ ok: false, error: "Missing userId" });
+    const snap = await db.collection("meetings").where("participantIds", "array-contains", userId).get();
+    const meetings = snap.docs.map(d => d.data());
+    meetings.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+    res.json({ ok: true, meetings });
+  } catch (err) { errJson(res, err.message); }
 });
 
 // ---------------- START ----------------

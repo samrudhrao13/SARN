@@ -3,6 +3,7 @@ import api from "../../config/apiClient";
 
 export default function BatchUpload() {
   const [sheet, setSheet] = useState("");
+  const [dueDate, setDueDate] = useState("");
   const [file, setFile] = useState(null);
 
   const [loading, setLoading] = useState(false);
@@ -28,12 +29,17 @@ export default function BatchUpload() {
 
   async function uploadFile() {
     if (!sheet.trim()) {
-      alert("Enter Sheet Name");
+      setMsg("⚠️ Sheet name is required");
+      return;
+    }
+
+    if (!dueDate) {
+      setMsg("⚠️ Due date is required");
       return;
     }
 
     if (!file) {
-      alert("Select Excel File");
+      setMsg("⚠️ Select an Excel file");
       return;
     }
 
@@ -44,6 +50,7 @@ export default function BatchUpload() {
       const formData = new FormData();
 
       formData.append("sheet", sheet);
+      formData.append("dueDate", dueDate);
       formData.append("file", file);
 
       const res = await api.post(
@@ -112,6 +119,18 @@ export default function BatchUpload() {
             )
           }
         />
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>
+            Due Date <span style={{ color: "#dc2626" }}>*</span>
+          </label>
+          <input
+            type="date"
+            value={dueDate}
+            onChange={e => setDueDate(e.target.value)}
+            style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1" }}
+          />
+        </div>
 
         <input
           type="file"

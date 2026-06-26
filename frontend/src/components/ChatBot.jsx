@@ -3,6 +3,26 @@ import api from "../config/apiClient";
 
 const BACKEND = import.meta.env.VITE_API_URL || "https://sarn-backend-862276535294.asia-south1.run.app";
 
+// Split text into sentence-level lines for side-by-side translation
+function splitLines(text) {
+  if (!text) return [""];
+  const lines = [];
+  for (const chunk of text.split(/\r?\n/)) {
+    const trimmed = chunk.trim();
+    if (!trimmed) { lines.push(""); continue; }
+    if (trimmed.length > 120) {
+      const parts = trimmed.split(/\.\s+/);
+      parts.forEach((part, idx) => {
+        const s = part.trim();
+        if (s) lines.push(idx < parts.length - 1 ? s + "." : s);
+      });
+    } else {
+      lines.push(trimmed);
+    }
+  }
+  return lines.length ? lines : [""];
+}
+
 const MAT_PATTERN = /(?:find|search|get|show|look\s*up|mat|mat#|mat\s*number)[\s:]*(\d{4,8})|^\s*(\d{4,8})\s*$/i;
 
 function extractMat(msg) {
@@ -39,7 +59,12 @@ export default function ChatBot() {
   const [sectionTranslating, setSectionTranslating] = useState({});
   const [sectionExpanded, setSectionExpanded] = useState({});
   const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0, total: 0 });
-  const fileRef = useRef(null);
+  const [sdsScanFields, setSdsScanFields] = useState(null);
+  const [sdsScanCopied, setSdsScanCopied] = useState(false);
+  const [deadlineAlerts, setDeadlineAlerts] = useState([]);
+  const [alertsLoaded, setAlertsLoaded] = useState(false);
+  const fileRef   = useRef(null);
+  const scanRef   = useRef(null);
   const bottomRef = useRef(null);
 
   function addUsage(usage) {
@@ -55,8 +80,77 @@ export default function ChatBot() {
     if (open) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, open]);
 
+  useEffect(() => {
+    if (!open || !isAdmin || alertsLoaded) return;
+    api.get("/admin/deadline-alerts")
+      .then(res => {
+        const alerts = res.data.ok ? (res.data.alerts || []) : [];
+        setDeadlineAlerts(alerts);
+        setMessages(prev => [
+          ...prev.filter(m => m.type !== "deadline_alerts"),
+          { from: "bot", type: "deadline_alerts", alerts },
+        ]);
+      })
+      .catch(() => {})
+      .finally(() => setAlertsLoaded(true));
+  }, [open]);
+
+  function refreshAlerts() {
+    setAlertsLoaded(false);
+    api.get("/admin/deadline-alerts")
+      .then(res => {
+        const alerts = res.data.ok ? (res.data.alerts || []) : [];
+        setDeadlineAlerts(alerts);
+        setMessages(prev => [
+          ...prev.filter(m => m.type !== "deadline_alerts"),
+          { from: "bot", type: "deadline_alerts", alerts },
+        ]);
+      })
+      .catch(() => {})
+      .finally(() => setAlertsLoaded(true));
+  }
+
   function downloadReport(period) {
     window.open(`${BACKEND}/admin/report/pdf?period=${period}`, "_blank");
+  }
+
+  async function handleSDSScan(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setSdsScanFields(null);
+    setDriveResults(null);
+    setFirestoreResults(null);
+    setPdfFields(null);
+    setMessages(prev => [
+      ...prev,
+      { from: "user", text: `🔬 ${file.name}` },
+      { from: "bot",  text: "Scanning SDS — extracting all template fields via Groq AI..." },
+    ]);
+    setLoading(true);
+    try {
+      const form = new FormData();
+      form.append("pdf", file);
+      const res = await api.post("/admin/sds/scan", form, { headers: { "Content-Type": "multipart/form-data" } });
+      if (res.data.ok) {
+        addUsage(res.data.usage);
+        const compCount = res.data.fields?.composition?.length || 0;
+        const ghsCount  = res.data.fields?.ghs_pictograms?.length || 0;
+        setMessages(prev => [
+          ...prev.slice(0, -1),
+          { from: "bot", text: `SDS scan complete. Found ${ghsCount} GHS pictogram${ghsCount !== 1 ? "s" : ""} and ${compCount} ingredient${compCount !== 1 ? "s" : ""} in Section 3.` },
+        ]);
+        setSdsScanFields(res.data.fields);
+      } else {
+        setMessages(prev => [
+          ...prev.slice(0, -1),
+          { from: "bot", text: res.data.error || "Could not scan PDF." },
+        ]);
+      }
+    } catch {
+      setMessages(prev => [...prev.slice(0, -1), { from: "bot", text: "Could not reach the server. Please try again." }]);
+    }
+    setLoading(false);
+    e.target.value = "";
   }
 
   async function handlePDF(e) {
@@ -108,6 +202,7 @@ export default function ChatBot() {
     setFirestoreResults(null);
     setExpandedSds(null);
     setPdfFields(null);
+    setSdsScanFields(null);
     setTranslating(false);
     setPdfSections([]);
     setSectionTranslations({});
@@ -270,21 +365,98 @@ export default function ChatBot() {
             flex: 1, overflowY: "auto", padding: "14px 12px",
             display: "flex", flexDirection: "column", gap: 10, background: "#0f172a",
           }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: m.from === "user" ? "flex-end" : "flex-start" }}>
-                <div style={{
-                  maxWidth: "85%", padding: "9px 13px",
-                  borderRadius: m.from === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                  background: m.from === "user" ? "#2563eb" : "#1e293b",
-                  color: "#f1f5f9", fontSize: 13, lineHeight: 1.6,
-                  whiteSpace: "pre-wrap", wordBreak: "break-word",
-                  boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
-                  border: m.from === "bot" ? "1px solid #334155" : "none",
-                }}>
-                  {m.text}
+            {messages.map((m, i) => {
+              if (m.type === "deadline_alerts") {
+                const alerts = m.alerts || [];
+                return (
+                  <div key={i} style={{ maxWidth: "100%" }}>
+                    <div style={{ background: "#0a0f1e", border: "1px solid #1e293b", borderLeft: "3px solid #f59e0b", borderRadius: 12, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: alerts.length ? 10 : 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>
+                          <span>🔔</span>
+                          <span>Deadline Alerts</span>
+                          {alerts.length > 0 && (
+                            <span style={{ background: "#7c2d12", color: "#fed7aa", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 700 }}>
+                              {alerts.length}
+                            </span>
+                          )}
+                        </div>
+                        <button onClick={refreshAlerts} style={{ background: "transparent", border: "1px solid #334155", borderRadius: 4, color: "#64748b", fontSize: 10, padding: "2px 7px", cursor: "pointer" }}>
+                          ↻ Refresh
+                        </button>
+                      </div>
+                      {alerts.length === 0 && (
+                        <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>No pending deadline alerts — all sheets are on track.</div>
+                      )}
+                      {alerts.map((alert, ai) => {
+                        const urgColor  = alert.urgency === "overdue" ? "#ef4444" : alert.urgency === "critical" ? "#f97316" : "#f59e0b";
+                        const urgBg     = alert.urgency === "overdue" ? "#1c0808" : alert.urgency === "critical" ? "#1c0e08" : "#1c1808";
+                        const urgBorder = alert.urgency === "overdue" ? "#7f1d1d" : alert.urgency === "critical" ? "#7c2d12" : "#713f12";
+                        const urgLabel  = alert.urgency === "overdue"
+                          ? `${Math.abs(alert.daysLeft)}d overdue`
+                          : alert.daysLeft === 0 ? "Due today"
+                          : `${alert.daysLeft}d left`;
+                        const belowUsers = alert.users.filter(u => u.vsAvg === "below");
+                        const aboveUsers = alert.users.filter(u => u.vsAvg === "above");
+                        return (
+                          <div key={ai} style={{ background: urgBg, border: `1px solid ${urgBorder}`, borderRadius: 7, padding: "8px 10px", marginBottom: ai < alerts.length - 1 ? 6 : 0 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, background: urgColor, color: "#fff", borderRadius: 4, padding: "1px 6px" }}>{alert.module}</span>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0" }}>{alert.sheet}</span>
+                              </div>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: urgColor }}>⏰ {urgLabel}</span>
+                            </div>
+                            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>
+                              Due: {alert.dueDate} &nbsp;·&nbsp; Avg: <span style={{ color: "#94a3b8", fontWeight: 600 }}>{alert.avgCompletionRate}%</span>
+                              &nbsp;·&nbsp; {alert.users.length} user{alert.users.length !== 1 ? "s" : ""} pending
+                            </div>
+                            {belowUsers.length > 0 && (
+                              <div style={{ marginBottom: 3 }}>
+                                <div style={{ fontSize: 10, color: "#ef4444", fontWeight: 700, marginBottom: 2 }}>▼ Below avg ({belowUsers.length})</div>
+                                {belowUsers.map((u, ui) => (
+                                  <div key={ui} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#fca5a5", padding: "2px 0", borderBottom: ui < belowUsers.length - 1 ? "1px solid #2d1010" : "none" }}>
+                                    <span style={{ fontWeight: 600 }}>{u.userId}</span>
+                                    <span>{u.pending}p / {u.assigned}t · <span style={{ color: "#ef4444", fontWeight: 700 }}>{u.completionRate}%</span></span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {aboveUsers.length > 0 && (
+                              <div>
+                                <div style={{ fontSize: 10, color: "#22c55e", fontWeight: 700, marginBottom: 2 }}>▲ Above avg ({aboveUsers.length})</div>
+                                {aboveUsers.map((u, ui) => (
+                                  <div key={ui} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#86efac", padding: "2px 0", borderBottom: ui < aboveUsers.length - 1 ? "1px solid #0a2010" : "none" }}>
+                                    <span style={{ fontWeight: 600 }}>{u.userId}</span>
+                                    <span>{u.pending}p / {u.assigned}t · <span style={{ color: "#22c55e", fontWeight: 700 }}>{u.completionRate}%</span></span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={i} style={{ display: "flex", justifyContent: m.from === "user" ? "flex-end" : "flex-start" }}>
+                  <div style={{
+                    maxWidth: "85%", padding: "9px 13px",
+                    borderRadius: m.from === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                    background: m.from === "user" ? "#2563eb" : "#1e293b",
+                    color: "#f1f5f9", fontSize: 13, lineHeight: 1.6,
+                    whiteSpace: "pre-wrap", wordBreak: "break-word",
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+                    border: m.from === "bot" ? "1px solid #334155" : "none",
+                  }}>
+                    {m.text}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             {/* PDF extracted fields card */}
             {pdfFields && (
@@ -370,6 +542,93 @@ export default function ChatBot() {
               </div>
             )}
 
+            {/* SDS Scanner results card */}
+            {sdsScanFields && (() => {
+              const f = sdsScanFields;
+              function copyAll() {
+                const comp = (f.composition || []).map(c => `    ${c.name || "?"}  |  CAS: ${c.cas || "?"}  |  ${c.percentage || "?"}`).join("\n");
+                const text = `=== SDS TEMPLATE FIELDS ===\n\nManufacturer: ${f.manufacturer_name || "—"}\nCity: ${f.city || "—"}\nState: ${f.state || "—"}\nZip: ${f.zip || "—"}\nEmail: ${f.email || "—"}\nContact: ${f.contact || "—"}\nEmergency: ${f.emergency || "—"}\n\nGHS Pictograms:\n${(f.ghs_pictograms || []).map(g => "  - " + g).join("\n") || "  —"}\n\nChemical Name: ${f.chemical_name || "—"}\nProduct No.: ${f.product_number || "—"}\nTrade Names: ${(f.trade_names || []).join(", ") || "—"}\n\nComposition (Section 3):\n${comp || "  —"}\n\nVOC Content: ${f.voc_content || "—"}\nSolid Content: ${f.solid_content || "—"}`;
+                navigator.clipboard.writeText(text).then(() => { setSdsScanCopied(true); setTimeout(() => setSdsScanCopied(false), 2000); });
+              }
+              const Row = ({ label, value }) => (
+                <div style={{ display: "flex", gap: 6, marginBottom: 4, fontSize: 12 }}>
+                  <span style={{ color: "#64748b", minWidth: 110, flexShrink: 0 }}>{label}:</span>
+                  <span style={{ color: value ? "#e2e8f0" : "#475569", fontStyle: value ? "normal" : "italic" }}>{value || "—"}</span>
+                </div>
+              );
+              return (
+                <div style={{ background: "#1e293b", border: "1px solid #d97706", borderRadius: 10, padding: "12px 14px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      🔬 SDS Template Fields
+                    </div>
+                    <button onClick={copyAll} style={{ background: sdsScanCopied ? "#14532d" : "#1e40af", color: "#fff", border: "none", borderRadius: 5, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                      {sdsScanCopied ? "✓ Copied" : "Copy All"}
+                    </button>
+                  </div>
+
+                  <Row label="Manufacturer"  value={f.manufacturer_name} />
+                  <Row label="City"          value={f.city} />
+                  <Row label="State"         value={f.state} />
+                  <Row label="Zip"           value={f.zip} />
+                  <Row label="Email"         value={f.email} />
+                  <Row label="Contact"       value={f.contact} />
+                  <Row label="Emergency"     value={f.emergency} />
+
+                  {/* GHS Pictograms */}
+                  <div style={{ marginTop: 8, marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>GHS Pictograms:</div>
+                    {(f.ghs_pictograms || []).length > 0
+                      ? (f.ghs_pictograms || []).map((g, i) => (
+                          <span key={i} style={{ display: "inline-block", background: "#451a03", color: "#fbbf24", borderRadius: 4, fontSize: 10, fontWeight: 700, padding: "2px 7px", margin: "2px 2px 2px 0" }}>{g}</span>
+                        ))
+                      : <span style={{ color: "#475569", fontStyle: "italic", fontSize: 12 }}>—</span>
+                    }
+                  </div>
+
+                  <Row label="Chemical Name"  value={f.chemical_name} />
+                  <Row label="Product No."    value={f.product_number} />
+
+                  {(f.trade_names || []).length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginBottom: 4, fontSize: 12 }}>
+                      <span style={{ color: "#64748b", minWidth: 110, flexShrink: 0 }}>Trade Names:</span>
+                      <span style={{ color: "#e2e8f0" }}>{f.trade_names.join(", ")}</span>
+                    </div>
+                  )}
+
+                  {/* Composition */}
+                  {(f.composition || []).length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 4 }}>Composition (Section 3):</div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                          <thead>
+                            <tr style={{ background: "#0f172a" }}>
+                              {["Ingredient", "CAS No.", "%"].map(h => (
+                                <th key={h} style={{ padding: "4px 7px", textAlign: "left", color: "#94a3b8", fontWeight: 600, borderBottom: "1px solid #334155" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {f.composition.map((c, i) => (
+                              <tr key={i} style={{ borderBottom: "1px solid #1e293b" }}>
+                                <td style={{ padding: "4px 7px", color: "#e2e8f0" }}>{c.name || "—"}</td>
+                                <td style={{ padding: "4px 7px", color: "#94a3b8" }}>{c.cas || "—"}</td>
+                                <td style={{ padding: "4px 7px", color: "#94a3b8" }}>{c.percentage || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  <Row label="VOC Content"   value={f.voc_content} />
+                  <Row label="Solid Content" value={f.solid_content} />
+                </div>
+              );
+            })()}
+
             {/* PDF section cards */}
             {pdfSections.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -415,8 +674,9 @@ export default function ChatBot() {
                               onClick={async () => {
                                 setSectionTranslating(p => ({ ...p, [i]: true }));
                                 try {
-                                  const res = await api.post("/admin/pdf/translate-section", { text: sec.text });
-                                  if (res.data.ok) { setSectionTranslations(p => ({ ...p, [i]: res.data.translated })); addUsage(res.data.usage); }
+                                  const origLines = splitLines(sec.text);
+                                  const res = await api.post("/admin/pdf/translate-section", { lines: origLines });
+                                  if (res.data.ok) { setSectionTranslations(p => ({ ...p, [i]: res.data.translatedLines })); addUsage(res.data.usage); }
                                 } catch {}
                                 setSectionTranslating(p => ({ ...p, [i]: false }));
                               }}
@@ -443,36 +703,50 @@ export default function ChatBot() {
                             )}
                           </div>
 
-                          {/* Side-by-side columns */}
-                          <div style={{ display: "flex", gap: 0, border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
-                            {/* Left: Original */}
-                            <div style={{ flex: 1, padding: "8px 10px", borderRight: "1px solid #334155" }}>
-                              <div style={{ fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                                Original
-                              </div>
-                              <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                {sec.text}
-                              </div>
-                            </div>
-
-                            {/* Right: Translation */}
-                            <div style={{ flex: 1, padding: "8px 10px", background: translated ? "#0f2a1a" : "#0f172a" }}>
-                              <div style={{ fontSize: 10, color: translated ? "#22c55e" : "#334155", fontWeight: 700, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                                English
-                              </div>
-                              {isTranslating ? (
-                                <div style={{ fontSize: 11, color: "#64748b", fontStyle: "italic" }}>Translating...</div>
-                              ) : translated ? (
-                                <div style={{ fontSize: 11, color: "#d1fae5", lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                                  {translated}
+                          {/* Line-by-line side-by-side */}
+                          {(() => {
+                            const origLines = splitLines(sec.text);
+                            // translated is now a pre-aligned string[] from the backend
+                            const transLines = Array.isArray(translated) ? translated : [];
+                            return (
+                              <div style={{ border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
+                                {/* Column headers */}
+                                <div style={{ display: "flex", background: "#0f172a", borderBottom: "1px solid #334155" }}>
+                                  <div style={{ flex: 1, padding: "5px 10px", borderRight: "1px solid #334155", fontSize: 10, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Original</div>
+                                  <div style={{ flex: 1, padding: "5px 10px", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: translated ? "#22c55e" : isTranslating ? "#f59e0b" : "#334155" }}>
+                                    {isTranslating ? "Translating…" : "English"}
+                                  </div>
                                 </div>
-                              ) : (
-                                <div style={{ fontSize: 11, color: "#334155", fontStyle: "italic" }}>
-                                  Click "Translate to English" to see translation here
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                                {/* One row per original line */}
+                                {origLines.map((oLine, li) => {
+                                  const tLine = transLines[li] ?? "";
+                                  const blank = !oLine.trim();
+                                  return (
+                                    <div key={li} style={{
+                                      display: "flex",
+                                      borderBottom: li < origLines.length - 1 ? "1px solid #1e2a3a" : "none",
+                                      background: li % 2 === 0 ? "transparent" : "rgba(255,255,255,0.02)",
+                                    }}>
+                                      <div style={{ flex: 1, padding: blank ? "3px 10px" : "5px 10px", borderRight: "1px solid #334155", fontSize: 11, color: "#94a3b8", lineHeight: 1.65, wordBreak: "break-word" }}>
+                                        {oLine}
+                                      </div>
+                                      <div style={{ flex: 1, padding: blank ? "3px 10px" : "5px 10px", fontSize: 11, lineHeight: 1.65, wordBreak: "break-word", background: translated && !blank ? "#0c2016" : "transparent" }}>
+                                        {isTranslating ? (
+                                          blank ? null : <span style={{ color: "#334155" }}>—</span>
+                                        ) : translated ? (
+                                          <span style={{ color: "#d1fae5" }}>{tLine}</span>
+                                        ) : (
+                                          !blank && li === 0
+                                            ? <span style={{ color: "#334155", fontStyle: "italic", fontSize: 10 }}>Click "Translate to English"</span>
+                                            : null
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -662,17 +936,20 @@ export default function ChatBot() {
             padding: "10px 12px", borderTop: "1px solid #1e293b",
             display: "flex", gap: 8, alignItems: "flex-end", background: "#0f172a",
           }}>
-            <input type="file" accept="application/pdf" ref={fileRef} onChange={handlePDF} style={{ display: "none" }} />
+            <input type="file" accept="application/pdf" ref={fileRef}  onChange={handlePDF}     style={{ display: "none" }} />
+            <input type="file" accept="application/pdf" ref={scanRef} onChange={handleSDSScan} style={{ display: "none" }} />
             <button
               onClick={() => fileRef.current?.click()}
               disabled={loading}
-              title="Upload PDF for translation"
-              style={{
-                background: "#1e293b", border: "1px solid #334155",
-                borderRadius: 8, padding: "7px 10px",
-                cursor: loading ? "not-allowed" : "pointer", fontSize: 16, flexShrink: 0,
-              }}
+              title="Upload PDF for section translation"
+              style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8, padding: "7px 10px", cursor: loading ? "not-allowed" : "pointer", fontSize: 16, flexShrink: 0 }}
             >📎</button>
+            <button
+              onClick={() => scanRef.current?.click()}
+              disabled={loading}
+              title="SDS Scanner — extract all template fields (manufacturer, GHS, composition…)"
+              style={{ background: "#1e293b", border: "1px solid #d97706", borderRadius: 8, padding: "7px 10px", cursor: loading ? "not-allowed" : "pointer", fontSize: 16, flexShrink: 0 }}
+            >🔬</button>
 
             <textarea
               rows={1}
